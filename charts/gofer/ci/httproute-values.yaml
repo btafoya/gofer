@@ -1,0 +1,11 @@
+config:
+  baseUrl: https://gofer.example.com
+secret:
+  secretKey: "0000000000000000000000000000000000000000000000000000000000000000"
+httpRoute:
+  enabled: true
+  parentRefs:
+    - name: public-gateway
+      namespace: gateway-system
+  hostnames:
+    - gofer.example.com

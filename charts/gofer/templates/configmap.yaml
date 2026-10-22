@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "gofer.fullname" . }}
+  labels:
+    {{- include "gofer.labels" . | nindent 4 }}
+data:
+  GOFER_ADDR: "0.0.0.0:8090"
+  GOFER_DB_PATH: "/data/gofer.db"
+  GOFER_BASE_URL: {{ required "config.baseUrl is required" .Values.config.baseUrl | quote }}
+  GOFER_AUTH_MODE: {{ .Values.config.authMode | quote }}
+  GO_ENV: {{ .Values.config.goEnv | quote }}
+  {{- with .Values.config.timezone }}
+  TZ: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.config.trustedProxyCidrs }}
+  GOFER_TRUSTED_PROXY_CIDRS: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.config.allowedCidrs }}
+  GOFER_ALLOWED_CIDRS: {{ . | quote }}
+  {{- end }}
+  {{- if .Values.config.allowInsecureLan }}
+  GOFER_ALLOW_INSECURE_LAN: "true"
+  {{- end }}
+  {{- range $key, $value := .Values.config.extraEnv }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}

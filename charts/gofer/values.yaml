@@ -1,0 +1,105 @@
+# Gofer runs a single writer on SQLite: keep replicas at 1 and the RWO volume.
+
+image:
+  repository: ghcr.io/cristianadrielbraun/gofer
+  # Defaults to the chart appVersion when empty.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+# Pod termination budget. Gofer drains for up to GOFER_SHUTDOWN_TIMEOUT before exiting.
+terminationGracePeriodSeconds: 45
+
+config:
+  # Public URL users reach, https in production. Required.
+  baseUrl: ""
+  # open | personal | managed
+  authMode: personal
+  # Production is the only value that enables asset caching.
+  goEnv: production
+  timezone: ""
+  # CIDRs of the ingress/proxy, so the real client IP is honored.
+  trustedProxyCidrs: ""
+  # Optional allowlist of client networks (GOFER_ALLOWED_CIDRS).
+  allowedCidrs: ""
+  allowInsecureLan: false
+  # Extra non-secret GOFER_* variables.
+  extraEnv: {}
+
+secret:
+  # Existing Secret holding every secret variable below (must contain GOFER_SECRET_KEY).
+  existingSecret: ""
+  # 64 hex characters. Losing it loses every stored credential.
+  secretKey: ""
+  setupToken: ""
+  # Extra secret variables, e.g. OAuth client secrets and VAPID keys.
+  env: {}
+
+persistence:
+  enabled: true
+  existingClaim: ""
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 1Gi
+  annotations: {}
+
+service:
+  type: ClusterIP
+  port: 8090
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  host: gofer.example.com
+  path: /
+  tls: []
+
+httpRoute:
+  enabled: false
+  annotations: {}
+  parentRefs: []
+  hostnames: []
+
+# http: /healthz (liveness) and /readyz (readiness). tcp: plain socket checks, for older images.
+probes:
+  type: http
+  startup:
+    periodSeconds: 5
+    # Managed mode migrates before listening, so the startup window is long.
+    failureThreshold: 60
+
+resources: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+extraVolumes: []
+extraVolumeMounts: []

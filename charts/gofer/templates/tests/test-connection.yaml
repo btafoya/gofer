@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "gofer.fullname" . }}-test-connection
+  labels:
+    {{- include "gofer.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: wget
+      image: busybox:1.37
+      command: ["wget"]
+      args:
+        - "-q"
+        - "-O"
+        - "/dev/null"
+        - "http://{{ include "gofer.fullname" . }}:{{ .Values.service.port }}/login"
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL

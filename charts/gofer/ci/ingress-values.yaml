@@ -1,0 +1,16 @@
+config:
+  baseUrl: https://gofer.example.com
+  trustedProxyCidrs: "10.42.0.0/16"
+secret:
+  secretKey: "0000000000000000000000000000000000000000000000000000000000000000"
+ingress:
+  enabled: true
+  className: nginx
+  host: gofer.example.com
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+  tls:
+    - secretName: gofer-tls
+      hosts:
+        - gofer.example.com
