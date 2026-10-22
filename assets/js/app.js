@@ -104,6 +104,8 @@ document.addEventListener("DOMContentLoaded", function () {
   // Set when the selection is every contact the filters match: { key, total, truncated }.
   var contactSelectAllMatching = null
   var contactSelectAllLoading = false
+  // Set while the selected contacts are being deleted.
+  var contactDeleteBusy = false
   var contactSelectionSyncQueued = false
   var lastSelectedMailId = null
   var mailSelectionBusy = false
@@ -2232,7 +2234,7 @@ document.addEventListener("DOMContentLoaded", function () {
       var count = selectedContactIds.size
       shell.toggleAttribute("data-contact-has-selection", count > 0)
       shell.querySelectorAll("[data-contact-selection-action]").forEach(function (button) {
-        button.disabled = count === 0 || contactSelectAllLoading
+        button.disabled = count === 0 || contactSelectAllLoading || contactDeleteBusy
       })
 
       var counted = contactSelectionCounts() ? count : 0
@@ -2371,6 +2373,87 @@ document.addEventListener("DOMContentLoaded", function () {
       form.remove()
     }
 
+    // contactBulkDeleteLimit in contact_selection.go: one request's share.
+    var CONTACT_DELETE_BATCH = 100
+
+    // Deletes the selected contacts after asking, as deleting each alone
+    // would: synced ones leave their address books too. The server takes
+    // them a batch at a time; the toast says how far it got and what failed.
+    function deleteSelectedContacts() {
+      var ids = Array.from(selectedContactIds)
+      if (!ids.length || contactDeleteBusy) return
+      var synced = 0
+      var unknown = 0
+      ids.forEach(function (id) {
+        var info = selectedContactInfo.get(id) || {}
+        if (info.synced === true) synced++
+        else if (info.synced !== false) unknown++
+      })
+      var count = formatMailCount(ids.length) + (ids.length === 1 ? " contact" : " contacts")
+      var note = synced
+        ? " " + formatMailCount(synced) + (synced === 1 ? " of them is" : " of them are") + " also removed from the address books " + (synced === 1 ? "it syncs" : "they sync") + " with."
+        : unknown ? " Any synced with an address book are also removed there." : ""
+      window.goferConfirm({
+        title: ids.length === 1 ? "Delete this contact?" : "Delete " + count + "?",
+        message: count + " will be deleted." + note,
+        destructive: true,
+        confirmLabel: "Delete",
+      }).then(function (accepted) {
+        if (!accepted) return
+        contactDeleteBusy = true
+        syncContactSelection()
+        var deleted = 0
+        var failed = []
+        var batches = []
+        for (var i = 0; i < ids.length; i += CONTACT_DELETE_BATCH) batches.push(ids.slice(i, i + CONTACT_DELETE_BATCH))
+        var progress = function () {
+          if (ids.length <= CONTACT_DELETE_BATCH) return
+          showGoferToast({ id: "contacts-deleting", title: "Deleting contacts…", description: formatMailCount(deleted + failed.length) + " of " + formatMailCount(ids.length) + " done.", variant: "info", icon: "spinner", position: "bottom-right", duration: 0, dismissible: false })
+        }
+        progress()
+        var run = Promise.resolve()
+        batches.forEach(function (batch) {
+          run = run.then(function () {
+            var body = new URLSearchParams()
+            batch.forEach(function (id) { body.append("id", id) })
+            return fetch("/api/contacts/bulk-delete", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" }, body: body.toString() })
+              .then(function (response) {
+                if (!response.ok) return response.text().then(function (text) { throw new Error(text.trim() || "Delete failed") })
+                return response.json()
+              })
+              .then(function (result) {
+                deleted += (result && result.deleted) || 0
+                ;((result && result.failed) || []).forEach(function (failure) { failed.push(failure) })
+                progress()
+              })
+          })
+        })
+        return run
+          .catch(function (err) {
+            // The rest of the selection wasn't sent; say so with what did go.
+            failed.push({ id: "", error: err.message })
+          })
+          .then(function () {
+            dismissGoferToast(document.getElementById("contacts-deleting"))
+            // Named before the selection, which knows the names, is cleared.
+            var first = failed[0]
+            var who = first && first.id && selectedContactInfo.get(first.id) ? selectedContactInfo.get(first.id).name : ""
+            var list = contactsListController()
+            if (list && typeof list.applyFilters === "function") list.applyFilters(list.filters).catch(function () {})
+            clearContactSelection()
+            if (!failed.length) {
+              showGoferToast({ id: "contacts-deleted", title: formatMailCount(deleted) + (deleted === 1 ? " contact deleted" : " contacts deleted"), variant: "success", icon: "success", position: "bottom-right", duration: 4000, dismissible: true })
+              return
+            }
+            showGoferToast({ id: "contacts-deleted", title: formatMailCount(deleted) + " deleted, " + formatMailCount(failed.length) + " not", description: (who ? who + ": " : "") + first.error, variant: deleted ? "warning" : "error", icon: deleted ? "warning" : "error", position: "bottom-right", duration: 10000, dismissible: true })
+          })
+          .finally(function () {
+            contactDeleteBusy = false
+            syncContactSelection()
+          })
+      })
+    }
+
     function setupContactsSelection() {
       if (document.body._goferContactsSelectionBound) return
       document.body._goferContactsSelectionBound = true
@@ -2438,8 +2521,10 @@ document.addEventListener("DOMContentLoaded", function () {
         }
         var action = e.target.closest("[data-contact-selection-action]")
         if (action && !action.disabled) {
-          if (action.getAttribute("data-contact-selection-action") === "compose") composeToSelectedContacts()
-          else if (action.getAttribute("data-contact-selection-action") === "export") exportSelectedContacts(Array.from(selectedContactIds))
+          var name = action.getAttribute("data-contact-selection-action")
+          if (name === "compose") composeToSelectedContacts()
+          else if (name === "export") exportSelectedContacts(Array.from(selectedContactIds))
+          else if (name === "delete") deleteSelectedContacts()
         }
       })
 
@@ -2493,12 +2578,11 @@ document.addEventListener("DOMContentLoaded", function () {
         if (title) title.textContent = target.multiple ? formatMailCount(selectedContactIds.size) + " contacts" : target.name || target.email || "Contact"
         var emailGroup = root.querySelector('[data-contacts-context-group="email"]')
         if (emailGroup) emailGroup.hidden = !target.email && !target.multiple
-        var single = { "copy-email": true, messages: true, edit: true, delete: true }
+        var single = { "copy-email": true, messages: true, edit: true }
         root.querySelectorAll("[data-contacts-context-action]").forEach(function (item) {
           item.hidden = target.multiple && !!single[item.getAttribute("data-contacts-context-action")]
         })
-        var deleteGroup = root.querySelector('[data-contacts-context-group="delete"]')
-        if (deleteGroup) deleteGroup.hidden = target.multiple
+
         close()
         placePointPopover(root, e.clientX, e.clientY)
         window.tui.popover.open("contacts-context-menu")
@@ -2546,6 +2630,8 @@ document.addEventListener("DOMContentLoaded", function () {
         composeToSelectedContacts()
       } else if (target.multiple && action === "export") {
         exportSelectedContacts(Array.from(selectedContactIds))
+      } else if (target.multiple && action === "delete") {
+        deleteSelectedContacts()
       } else if (action === "compose" && target.email) {
         // The same compose a mailto: link opens.
         var values = parseMailtoIntent("mailto:" + encodeURIComponent(target.email))

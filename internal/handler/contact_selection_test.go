@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -106,5 +107,50 @@ func TestExportOfSelectedContactsLeavesOutOtherUsersContacts(t *testing.T) {
 	}
 	if w := export("owner"); w.Code != http.StatusBadRequest {
 		t.Fatalf("exporting nothing = %d, want 400", w.Code)
+	}
+}
+
+func TestBulkDeleteRemovesOnlyTheUsersPickedContacts(t *testing.T) {
+	h, ids := contactSelectionFixture(t)
+	form := url.Values{}
+	for _, name := range []string{"Ines Park", "Tamsin Ray", "Wren Hollis"} {
+		form.Add("id", ids[name])
+	}
+	w := httptest.NewRecorder()
+	h.handleDeleteContacts(w, contactSelectionRequest(http.MethodPost, "/api/contacts/bulk-delete", "owner", form))
+	var result contactBulkDeleteResult
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &result) != nil {
+		t.Fatalf("bulk delete = %d %s", w.Code, w.Body.String())
+	}
+	// Another user's contact is no different from one already gone.
+	if result.Deleted != 3 || len(result.Failed) != 0 {
+		t.Fatalf("result = %#v, want 3 done and no failures", result)
+	}
+	exists := func(user, name string) bool {
+		t.Helper()
+		contact, err := h.db.GetContact(t.Context(), user, ids[name])
+		if err != nil {
+			t.Fatalf("GetContact(%s) error = %v", name, err)
+		}
+		return contact != nil
+	}
+	if exists("owner", "Ines Park") || exists("owner", "Tamsin Ray") {
+		t.Fatal("a picked contact is still there")
+	}
+	if !exists("owner", "Oren Vale") {
+		t.Fatal("a contact that wasn't picked was deleted")
+	}
+	if !exists("stranger", "Wren Hollis") {
+		t.Fatal("another user's contact was deleted")
+	}
+
+	tooMany := url.Values{}
+	for i := 0; i <= contactBulkDeleteLimit; i++ {
+		tooMany.Add("id", fmt.Sprintf("contact-%d", i))
+	}
+	w = httptest.NewRecorder()
+	h.handleDeleteContacts(w, contactSelectionRequest(http.MethodPost, "/api/contacts/bulk-delete", "owner", tooMany))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("over the batch limit = %d, want 400", w.Code)
 	}
 }

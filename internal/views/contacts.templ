@@ -1627,22 +1627,25 @@ templ ContactsSelectAllControl() {
 // list's message actions do.
 templ ContactsSelectionActions() {
 	<div class="items-center gap-1" data-contact-selection-actions>
-		@contactSelectionAction("compose", "New message", "Write to the selected contacts") {
+		@contactSelectionAction("compose", "New message", "Write to the selected contacts", "") {
 			@icon.Pen(icon.Props{Class: "size-3.5"})
 		}
-		@contactSelectionAction("export", "Export vCards", "Export the selected contacts") {
+		@contactSelectionAction("export", "Export vCards", "Export the selected contacts", "") {
 			@icon.Download(icon.Props{Class: "size-3.5"})
+		}
+		@contactSelectionAction("delete", "Delete", "Delete the selected contacts", "hover:bg-destructive/10 hover:text-destructive") {
+			@icon.Trash2(icon.Props{Class: "size-3.5"})
 		}
 	</div>
 }
 
-templ contactSelectionAction(action, tip, label string) {
+templ contactSelectionAction(action, tip, label, class string) {
 	@tooltip.Tooltip() {
 		@tooltip.Trigger() {
 			@button.Button(button.Props{
 				Variant:    button.VariantGhost,
 				Size:       button.SizeIcon,
-				Class:      "h-7 w-7",
+				Class:      "h-7 w-7 " + class,
 				Disabled:   true,
 				Attributes: templ.Attributes{"data-contact-selection-action": action, "aria-label": label},
 			}) {

@@ -199,6 +199,7 @@ func (h *Handler) RegisterUserStorageRoutes(ctx context.Context, mux *http.Serve
 	private("GET /api/contacts/search", routed.handleContactSearch)
 	private("GET /api/contacts/export", routed.handleExportContacts)
 	private("POST /api/contacts/export", routed.handleExportSelectedContacts)
+	private("POST /api/contacts/bulk-delete", routed.handleUserDeleteContacts)
 	private("GET /api/contacts/ids", routed.handleContactIDs)
 	private("GET /api/contacts/{id}/export", routed.handleExportContact)
 	private("GET /calendar", routed.handleCalendar)

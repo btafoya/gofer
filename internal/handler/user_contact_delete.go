@@ -20,46 +20,8 @@ func (h *Handler) handleUserDeleteContact(w http.ResponseWriter, r *http.Request
 	owner, id := h.userID(r.Context()), strings.TrimSpace(r.PathValue("id"))
 	var deleted string
 	err := h.userIMAP.RunUserServiceWork(r.Context(), owner, func(ctx context.Context) error {
-		snapshot, err := h.userAccounts.SnapshotContactDelete(ctx, owner, id)
-		if err != nil {
-			return err
-		}
-		// Reject any already-known invalid endpoint before deleting valid sources.
-		// Network failures can still leave partial remote progress for retry.
-		for _, card := range snapshot.Sources() {
-			if err := validateUserContactDeleteSource(snapshot, card.ID); err != nil {
-				return err
-			}
-		}
-		for _, card := range snapshot.Sources() {
-			deleteSource := func(ctx context.Context) error {
-				if err := h.userAccounts.ValidateContactDelete(ctx, snapshot); err != nil {
-					return err
-				}
-				if card.RemoteID != "" {
-					if err := h.deleteUserContactSource(ctx, snapshot, card.ID); err != nil {
-						return userContactPreviewProviderError{err}
-					}
-				}
-				var err error
-				snapshot, err = h.userAccounts.AcknowledgeContactDeleteSource(ctx, snapshot, card.ID)
-				return err
-			}
-			if card.AccountID == "" {
-				err = deleteSource(ctx)
-			} else {
-				err = h.userIMAP.RunAccountService(ctx, owner, card.AccountID, mail.AccountServiceContacts, 2*time.Minute, deleteSource)
-			}
-			if err != nil {
-				return err
-			}
-		}
-		deleted, err = h.userAccounts.FinishContactDelete(ctx, snapshot)
-		if err == nil {
-			if wakeErr := h.WakeUserContactQueue(ctx, owner); wakeErr != nil && ctx.Err() == nil {
-				log.Printf("owned contacts: wake committed delete queue cancellation: %v", wakeErr)
-			}
-		}
+		var err error
+		deleted, err = h.deleteUserContact(ctx, owner, id)
 		return err
 	})
 	if err != nil && deleted == "" {
@@ -72,6 +34,54 @@ func (h *Handler) handleUserDeleteContact(w http.ResponseWriter, r *http.Request
 		return
 	}
 	http.Redirect(w, r, "/contacts", http.StatusSeeOther)
+}
+
+// deleteUserContact deletes an owned contact: from each address book it
+// syncs with, under that account's contacts service, then from Gofer. It
+// gives the deleted contact's id; a known-invalid source stops it before any
+// address book is touched.
+func (h *Handler) deleteUserContact(ctx context.Context, owner, id string) (deleted string, err error) {
+	snapshot, err := h.userAccounts.SnapshotContactDelete(ctx, owner, id)
+	if err != nil {
+		return "", err
+	}
+	// Reject any already-known invalid endpoint before deleting valid sources.
+	// Network failures can still leave partial remote progress for retry.
+	for _, card := range snapshot.Sources() {
+		if err := validateUserContactDeleteSource(snapshot, card.ID); err != nil {
+			return "", err
+		}
+	}
+	for _, card := range snapshot.Sources() {
+		deleteSource := func(ctx context.Context) error {
+			if err := h.userAccounts.ValidateContactDelete(ctx, snapshot); err != nil {
+				return err
+			}
+			if card.RemoteID != "" {
+				if err := h.deleteUserContactSource(ctx, snapshot, card.ID); err != nil {
+					return userContactPreviewProviderError{err}
+				}
+			}
+			var err error
+			snapshot, err = h.userAccounts.AcknowledgeContactDeleteSource(ctx, snapshot, card.ID)
+			return err
+		}
+		if card.AccountID == "" {
+			err = deleteSource(ctx)
+		} else {
+			err = h.userIMAP.RunAccountService(ctx, owner, card.AccountID, mail.AccountServiceContacts, 2*time.Minute, deleteSource)
+		}
+		if err != nil {
+			return "", err
+		}
+	}
+	deleted, err = h.userAccounts.FinishContactDelete(ctx, snapshot)
+	if err == nil {
+		if wakeErr := h.WakeUserContactQueue(ctx, owner); wakeErr != nil && ctx.Err() == nil {
+			log.Printf("owned contacts: wake committed delete queue cancellation: %v", wakeErr)
+		}
+	}
+	return deleted, err
 }
 
 func validateUserContactDeleteSource(snapshot *config.UserContactDeleteSnapshot, cardID string) error {

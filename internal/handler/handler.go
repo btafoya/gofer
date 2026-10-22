@@ -465,6 +465,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /search", h.handleSearch)
 	mux.HandleFunc("GET /api/contacts/export", h.handleExportContacts)
 	mux.HandleFunc("POST /api/contacts/export", h.handleExportSelectedContacts)
+	mux.HandleFunc("POST /api/contacts/bulk-delete", h.handleDeleteContacts)
 	mux.HandleFunc("GET /api/contacts/ids", h.handleContactIDs)
 	mux.HandleFunc("GET /api/contacts/{id}/export", h.handleExportContact)
 	mux.HandleFunc("GET /api/contacts/search", h.handleContactSearch)
@@ -1474,28 +1475,42 @@ func (h *Handler) handleUnifyContact(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleDeleteContact(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	userID := h.userID(ctx)
-	contact, err := h.db.GetContact(ctx, userID, r.PathValue("id"))
-	if err != nil {
-		http.Error(w, "delete failed", http.StatusInternalServerError)
-		return
-	}
-	if contact != nil {
-		if err := h.deleteContactFromAccounts(ctx, userID, *contact); err != nil {
-			http.Error(w, "Contact sync delete failed: "+err.Error(), http.StatusBadGateway)
-			return
-		}
-	} else {
+	err := h.deleteContact(r.Context(), h.userID(r.Context()), r.PathValue("id"))
+	var syncErr contactSyncDeleteError
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
 		http.NotFound(w, r)
-		return
-	}
-	settings := h.db.GetContactSettings(ctx, h.userID(ctx))
-	if err := h.db.DeleteContact(ctx, userID, r.PathValue("id"), settings.PreventRecreateDeleted); err != nil {
+	case errors.As(err, &syncErr):
+		http.Error(w, "Contact sync delete failed: "+syncErr.err.Error(), http.StatusBadGateway)
+	case err != nil:
 		http.Error(w, "delete failed", http.StatusInternalServerError)
-		return
+	default:
+		http.Redirect(w, r, "/contacts", http.StatusSeeOther)
 	}
-	http.Redirect(w, r, "/contacts", http.StatusSeeOther)
+}
+
+// contactSyncDeleteError is a contact's address book refusing its deletion.
+type contactSyncDeleteError struct{ err error }
+
+func (e contactSyncDeleteError) Error() string { return e.err.Error() }
+func (e contactSyncDeleteError) Unwrap() error { return e.err }
+
+// deleteContact deletes a contact of the user, first from the address books
+// it syncs with, then from Gofer. It gives sql.ErrNoRows for a contact the
+// user doesn't have, and contactSyncDeleteError when an address book refuses.
+func (h *Handler) deleteContact(ctx context.Context, userID, id string) error {
+	contact, err := h.db.GetContact(ctx, userID, id)
+	if err != nil {
+		return err
+	}
+	if contact == nil {
+		return sql.ErrNoRows
+	}
+	if err := h.deleteContactFromAccounts(ctx, userID, *contact); err != nil {
+		return contactSyncDeleteError{err}
+	}
+	settings := h.db.GetContactSettings(ctx, userID)
+	return h.db.DeleteContact(ctx, userID, id, settings.PreventRecreateDeleted)
 }
 
 func (h *Handler) handleContactSearch(w http.ResponseWriter, r *http.Request) {
