@@ -195,6 +195,9 @@ func RunShared() {
 	handler = compress(handler)
 	handler = httpConfig.Middleware(handler)
 	handler = httpConfig.ClientNetworkMiddleware(authConfig.Enabled, handler)
+	handler = withHealth(handler, func(ctx context.Context) error {
+		return db.Read().PingContext(ctx)
+	})
 
 	fmt.Printf("Gofer running on %s\n", httpConfig.BaseURL)
 	fmt.Printf("listening on %s\n", httpConfig.ListenAddr)

@@ -264,6 +264,17 @@ func configuredSyncCapacity() (mail.UserIMAPBackgroundOptions, error) {
 	return options, nil
 }
 
+// ready reports readiness: the central database answers and the process is not draining.
+func (app *managedApplication) ready(ctx context.Context) error {
+	app.requestMu.Lock()
+	closing := app.closing
+	app.requestMu.Unlock()
+	if closing {
+		return errors.New("shutting down")
+	}
+	return app.storage.central.Read().PingContext(ctx)
+}
+
 // RunManaged runs managed mode on per-user storage until ctx is canceled.
 func RunManaged(ctx context.Context, stdout, stderr io.Writer) (err error) {
 	maxOpen, err := configuredUserDatabaseLimit()
@@ -288,7 +299,7 @@ func RunManaged(ctx context.Context, stdout, stderr io.Writer) (err error) {
 	if err != nil {
 		return err
 	}
-	server := newHTTPServer(app)
+	server := newHTTPServer(withHealth(app, app.ready))
 	server.BaseContext = func(net.Listener) context.Context { return app.ctx }
 	defer server.Close()
 	if _, err := fmt.Fprintf(stdout, "Gofer running on %s\nlistening on %s\ndatabase: %s\nauth: managed\n", app.httpConfig.BaseURL, listener.Addr(), app.storage.central.Path()); err != nil {
