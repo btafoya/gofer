@@ -14176,7 +14176,7 @@ function loadComposeSignatures(form, refresh) {
 }
 
 function composeSignatureHTML(sig, source) {
-  var html = sig && sig.html_body ? _sanitizeComposeHTML(sig.html_body) : _composePlainToHTML((sig && sig.text_body) || "")
+  var html = sig && sig.html_body ? _sanitizeComposeHTML(sig.html_body, true) : _composePlainToHTML((sig && sig.text_body) || "")
   return '<div data-gofer-signature="' + source + '" data-signature-id="' + _escapeComposeHTML(sig.id || "") + '" data-signature-html="' + _escapeComposeHTML(html) + '">' + html + '</div>'
 }
 
@@ -14235,6 +14235,7 @@ function insertComposeSignatureWithPlacement(form, sig, source, placement) {
     } else {
       existing.outerHTML = html
       syncComposeEditor(editor)
+      uploadComposeSignatureImages(form)
       return true
     }
   }
@@ -14254,7 +14255,73 @@ function insertComposeSignatureWithPlacement(form, sig, source, placement) {
   }
   if (source === "auto") placeComposeCursorBeforeSignature(editor, existingComposeSignature(editor))
   syncComposeEditor(editor)
+  uploadComposeSignatureImages(form)
   return true
+}
+
+function _composeDataURLFile(dataURL, name) {
+  var comma = String(dataURL || "").indexOf(",")
+  var header = comma > 0 ? dataURL.slice(0, comma) : ""
+  var match = /^data:(image\/(?:png|jpe?g|gif|webp|bmp|svg\+xml))(?:;[^;,]*)*$/i.exec(header)
+  if (!match) return null
+  var type = match[1].toLowerCase()
+  var payload = dataURL.slice(comma + 1)
+  var bytes
+  try {
+    if (/;base64$/i.test(header)) {
+      var raw = atob(payload.replace(/\s+/g, ""))
+      bytes = new Uint8Array(raw.length)
+      for (var i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i)
+    } else {
+      bytes = new TextEncoder().encode(decodeURIComponent(payload))
+    }
+  } catch (e) {
+    return null
+  }
+  if (!bytes.length) return null
+  var ext = { "image/jpeg": "jpg", "image/jpg": "jpg", "image/svg+xml": "svg" }[type] || type.slice("image/".length)
+  return new File([bytes], name + "." + ext, { type: type })
+}
+
+// Signatures can embed images as data: URLs, which many mail apps refuse to
+// show. Upload each one as an inline image so it is sent as a cid: part.
+function uploadComposeSignatureImages(form) {
+  var editor = form && form.querySelector("[data-compose-editor]")
+  var imgs = editor ? editor.querySelectorAll('img[src^="data:"]') : []
+  Array.prototype.forEach.call(imgs, function (img, index) {
+    var file = _composeDataURLFile(img.getAttribute("src"), "signature-image-" + (index + 1))
+    if (!file || !validateComposeUploadFile(form, file)) {
+      img.remove()
+      syncComposeEditor(editor)
+      return
+    }
+    changeComposeUploadCount(form, 1)
+    uploadComposeAttachmentFile(file, null)
+      .then(function (att) {
+        if (!att.preview_url) throw new Error("That image type cannot be previewed inline")
+        if (img.isConnected) {
+          var signature = img.closest("[data-gofer-signature]")
+          var unedited = signature && signature.getAttribute("data-signature-html") === signature.innerHTML
+          img.src = att.preview_url
+          img.dataset.composeInlineImage = ""
+          img.dataset.attachmentId = att.id || ""
+          img.dataset.existingAttachmentId = ""
+          img.dataset.contentId = att.content_id || composeInlineContentID(att)
+          img.dataset.filename = att.filename || file.name
+          img.dataset.contentType = att.content_type || file.type
+          img.dataset.size = String(att.size || file.size)
+          img.dataset.previewUrl = att.preview_url
+          // Keep an untouched auto signature replaceable when the account changes.
+          if (unedited) signature.setAttribute("data-signature-html", signature.innerHTML)
+          syncComposeEditor(editor)
+        }
+        changeComposeUploadCount(form, -1)
+      })
+      .catch(function (err) {
+        changeComposeUploadCount(form, -1, "failed")
+        composeUploadFailed(form, composeUploadErrorMessage("insert", file, err))
+      })
+  })
 }
 
 function composeSignaturePlacement(form, data) {
@@ -14768,7 +14835,9 @@ function _inlineComposeStyleRules(root) {
   }
 }
 
-function _sanitizeComposeHTML(html) {
+// allowDataImages keeps data: images, which only signature insertion wants:
+// uploadComposeSignatureImages then turns them into inline attachments.
+function _sanitizeComposeHTML(html, allowDataImages) {
   var template = document.createElement("template")
   template.innerHTML = html || ""
   _inlineComposeStyleRules(template.content)
@@ -14829,7 +14898,8 @@ function _sanitizeComposeHTML(html) {
         src = remoteSrc
         node.setAttribute("src", src)
       }
-      if (!/^(cid:|https?:|\/api\/attachments\/|\/api\/inline-content\/|\/compose\/attachments\/|\/api\/remote-assets\/)/i.test(src)) {
+      var dataImage = allowDataImages && /^data:image\/(png|jpe?g|gif|webp|bmp|svg\+xml)[;,]/i.test(src)
+      if (!dataImage && !/^(cid:|https?:|\/api\/attachments\/|\/api\/inline-content\/|\/compose\/attachments\/|\/api\/remote-assets\/)/i.test(src)) {
         node.remove()
         continue
       }
