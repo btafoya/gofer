@@ -9,7 +9,7 @@
       "properties": {
         "baseUrl": {
           "type": "string",
-          "pattern": "^https?://[^/]+"
+          "pattern": "^(https?://[^/]+)?$"
         },
         "authMode": {
           "type": "string",
