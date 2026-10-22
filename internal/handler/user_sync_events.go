@@ -9,6 +9,8 @@ import (
 	"github.com/cristianadrielbraun/gofer/internal/storage"
 )
 
+const sseKeepaliveInterval = 20 * time.Second
+
 // Streams share only the event bus. Snapshots are copied before writing, and
 // current central ownership is checked even for accounts added after connection.
 func (h *Handler) handleUserSSE(w http.ResponseWriter, r *http.Request) {
@@ -42,6 +44,7 @@ func (h *Handler) handleUserSSE(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
 	_, _ = fmt.Fprint(w, "event: connected\ndata: {}\n\n")
 	flusher.Flush()
 	writeEvent := func(event mail.Event) bool {
@@ -72,12 +75,18 @@ func (h *Handler) handleUserSSE(w http.ResponseWriter, r *http.Request) {
 	}
 	tick := time.NewTicker(1200 * time.Millisecond)
 	defer tick.Stop()
+	keepalive := time.NewTicker(sseKeepaliveInterval)
+	defer keepalive.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-h.userStorageContext.Done():
 			return
+		case <-keepalive.C:
+			// Comment lines keep idle proxies from closing the stream.
+			_, _ = fmt.Fprint(w, ": ping\n\n")
+			flusher.Flush()
 		case <-tick.C:
 			if err := h.userStorage.ValidateUser(ctx, owner); err != nil {
 				return
