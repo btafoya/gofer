@@ -1,0 +1,58 @@
+name: Helm chart CI
+
+on:
+  pull_request:
+    paths:
+      - "charts/**"
+      - ".github/workflows/helm-ci.yml"
+  push:
+    branches:
+      - master
+    paths:
+      - "charts/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: helm-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  HELM_VERSION: v3.17.3
+  CHART_DIR: charts/gofer
+
+jobs:
+  lint:
+    name: Lint and render
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Lint
+        run: helm lint "${CHART_DIR}" --strict
+
+      - name: Render each value set
+        run: |
+          mkdir -p rendered
+          for values in "${CHART_DIR}"/ci/*.yaml; do
+            name="$(basename "${values}" .yaml)"
+            helm template gofer "${CHART_DIR}" --namespace gofer --values "${values}" > "rendered/${name}.yaml"
+          done
+
+      - name: Validate rendered manifests
+        uses: docker://ghcr.io/yannh/kubeconform:v0.6.7
+        with:
+          entrypoint: /kubeconform
+          # Gateway API CRDs are not in the default schema catalog, so skip them.
+          args: "-strict -summary -ignore-missing-schemas -kubernetes-version 1.31.0 rendered/"
+
+      - name: Check chart packaging
+        run: helm package "${CHART_DIR}" --destination "${RUNNER_TEMP}"
