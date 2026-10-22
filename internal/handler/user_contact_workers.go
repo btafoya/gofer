@@ -288,6 +288,11 @@ func (w *userContactWorkers) process(parent context.Context, job userContactJob)
 		if ctx.Err() != nil {
 			return
 		}
+		purged, purgeErr := w.h.purgeContactTrash(ctx, job.owner, contactTrashPurgeBatch)
+		w.report(ctx, "empty old contacts from the Trash", purgeErr)
+		if ctx.Err() != nil {
+			return
+		}
 		next, err := w.h.userAccounts.NextContactSyncAttempt(ctx, job.owner, userContactClaimTimeout)
 		if err != nil {
 			w.report(ctx, "read outbound deadline", err)
@@ -298,6 +303,10 @@ func (w *userContactWorkers) process(parent context.Context, job userContactJob)
 		recovery := time.Now().Add(w.options.RecoveryInterval)
 		if next.IsZero() || next.After(recovery) {
 			next = recovery
+		}
+		// A full purge batch may have left more due; come straight back.
+		if purged == contactTrashPurgeBatch {
+			next = time.Now()
 		}
 		updated, err := w.h.userStorage.CompleteContactQueue(ctx, job.owner, revision, next)
 		w.report(ctx, "defer outbound queue", err)

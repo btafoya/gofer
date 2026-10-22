@@ -2422,7 +2422,7 @@ document.addEventListener("DOMContentLoaded", function () {
                 return response.json()
               })
               .then(function (result) {
-                deleted += (result && result.deleted) || 0
+                deleted += (result && result.trashed) || 0
                 ;((result && result.failed) || []).forEach(function (failure) { failed.push(failure) })
                 progress()
               })

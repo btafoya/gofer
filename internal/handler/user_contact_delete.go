@@ -7,7 +7,6 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 
 	"github.com/cristianadrielbraun/gofer/internal/config"
@@ -16,30 +15,10 @@ import (
 	"github.com/cristianadrielbraun/gofer/internal/storage"
 )
 
-func (h *Handler) handleUserDeleteContact(w http.ResponseWriter, r *http.Request) {
-	owner, id := h.userID(r.Context()), strings.TrimSpace(r.PathValue("id"))
-	var deleted string
-	err := h.userIMAP.RunUserServiceWork(r.Context(), owner, func(ctx context.Context) error {
-		var err error
-		deleted, err = h.deleteUserContact(ctx, owner, id)
-		return err
-	})
-	if err != nil && deleted == "" {
-		var provider userContactPreviewProviderError
-		if errors.As(err, &provider) && !errors.Is(err, storage.ErrContactEditChanged) && !errors.Is(err, config.ErrAccountServicesChanged) && !errors.Is(err, storage.ErrAccountRoute) && !errors.Is(err, storage.ErrUserStoreOwner) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-			http.Error(w, "Contact sync delete failed: "+err.Error(), http.StatusBadGateway)
-		} else {
-			userContactEditError(w, r, err)
-		}
-		return
-	}
-	http.Redirect(w, r, "/contacts", http.StatusSeeOther)
-}
-
-// deleteUserContact deletes an owned contact: from each address book it
-// syncs with, under that account's contacts service, then from Gofer. It
-// gives the deleted contact's id; a known-invalid source stops it before any
-// address book is touched.
+// deleteUserContact deletes an owned contact for good, in the Trash or not:
+// from each address book it syncs with, under that account's contacts
+// service, then from Gofer. It gives the deleted contact's id; a
+// known-invalid source stops it before any address book is touched.
 func (h *Handler) deleteUserContact(ctx context.Context, owner, id string) (deleted string, err error) {
 	snapshot, err := h.userAccounts.SnapshotContactDelete(ctx, owner, id)
 	if err != nil {

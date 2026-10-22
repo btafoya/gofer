@@ -61,16 +61,35 @@ func migrateV122ToV123(db *sql.DB) error {
 // many went; ids that aren't the user's contacts, or are already gone, are
 // left out.
 func (db *DB) TrashContacts(ctx context.Context, userID string, ids []string) (int, error) {
+	return db.moveContactsToTrash(ctx, userID, ids, nil)
+}
+
+// TrashUserContacts is TrashContacts in per-user storage, under the owner's
+// guard.
+func (db *DB) TrashUserContacts(ctx context.Context, owner string, ids []string, guard func(*sql.Tx) error) (int, error) {
+	if guard == nil {
+		return 0, ErrContactSyncSuperseded
+	}
+	return db.moveContactsToTrash(ctx, owner, ids, guard)
+}
+
+func (db *DB) moveContactsToTrash(ctx context.Context, userID string, ids []string, guard func(*sql.Tx) error) (int, error) {
 	tx, err := db.Write().BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback()
+	if guard != nil {
+		if err := contactSyncOwnerTx(ctx, tx, userID, guard); err != nil {
+			return 0, err
+		}
+	}
 	trashed := 0
 	for _, id := range ids {
+		id = strings.TrimSpace(id)
 		result, err := tx.ExecContext(ctx, `
 			UPDATE contact_profiles SET is_deleted = 1, trashed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-			WHERE user_id = ? AND id = ? AND is_deleted = 0`, userID, strings.TrimSpace(id))
+			WHERE user_id = ? AND id = ? AND is_deleted = 0`, userID, id)
 		if err != nil {
 			return 0, err
 		}
@@ -96,11 +115,29 @@ func (db *DB) TrashContacts(ctx context.Context, userID string, ids []string) (i
 // RestoreContacts brings the user's contacts back from the Trash, as they
 // were and still linked to their address books. It gives how many came back.
 func (db *DB) RestoreContacts(ctx context.Context, userID string, ids []string) (int, error) {
+	return db.restoreContacts(ctx, userID, ids, nil)
+}
+
+// RestoreUserContacts is RestoreContacts in per-user storage, under the
+// owner's guard.
+func (db *DB) RestoreUserContacts(ctx context.Context, owner string, ids []string, guard func(*sql.Tx) error) (int, error) {
+	if guard == nil {
+		return 0, ErrContactSyncSuperseded
+	}
+	return db.restoreContacts(ctx, owner, ids, guard)
+}
+
+func (db *DB) restoreContacts(ctx context.Context, userID string, ids []string, guard func(*sql.Tx) error) (int, error) {
 	tx, err := db.Write().BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback()
+	if guard != nil {
+		if err := contactSyncOwnerTx(ctx, tx, userID, guard); err != nil {
+			return 0, err
+		}
+	}
 	restored := 0
 	for _, id := range ids {
 		result, err := tx.ExecContext(ctx, `
@@ -120,6 +157,26 @@ func (db *DB) RestoreContacts(ctx context.Context, userID string, ids []string) 
 		_ = db.LogContactActivity(ctx, userID, "contacts_restored", "", "Contacts restored from Trash", restored)
 	}
 	return restored, nil
+}
+
+// ContactTrashOwners gives the users with contacts that went to the Trash
+// before cutoff.
+func (db *DB) ContactTrashOwners(ctx context.Context, cutoff time.Time) ([]string, error) {
+	rows, err := db.Read().QueryContext(ctx, `SELECT DISTINCT user_id FROM contact_profiles
+		WHERE is_deleted = 1 AND trashed_at IS NOT NULL AND trashed_at < ? ORDER BY user_id`, formatDBTime(cutoff))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var owners []string
+	for rows.Next() {
+		var owner string
+		if err := rows.Scan(&owner); err != nil {
+			return nil, err
+		}
+		owners = append(owners, owner)
+	}
+	return owners, rows.Err()
 }
 
 // TrashedContactIDs gives the user's contacts that went to the Trash before

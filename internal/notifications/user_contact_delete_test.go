@@ -173,19 +173,23 @@ func newOwnedContactDeleteFixture(t *testing.T, provider string) (*userStorageFi
 	return f, api, tokens
 }
 
+// requestContactDelete deletes the contact for good: it moves it to the
+// Trash, unless it is there already, then deletes it from there.
 func requestContactDelete(f *userStorageFixture, owner string) *httptest.ResponseRecorder {
-	return f.request(owner, http.MethodPost, "/api/contacts/same-delete-profile/delete", "")
+	f.request(owner, http.MethodPost, "/api/contacts/same-delete-profile/delete", "")
+	return f.request(owner, http.MethodPost, "/api/contacts/same-delete-profile/delete-forever", "")
 }
 
 func assertContactDeleteHTTPState(t *testing.T, f *userStorageFixture, owner string, cards int, deleted bool) {
 	t.Helper()
 	if err := f.routing.WithUser(t.Context(), owner, func(db *storage.DB) error {
-		var tombstone, gotCards, suppressed, queue, events int
+		var tombstone, trashed, gotCards, suppressed, queue, events int
 		queries := []struct {
 			query string
 			dest  *int
 		}{
-			{`SELECT is_deleted FROM contact_profiles WHERE id='same-delete-profile'`, &tombstone},
+			{`SELECT is_deleted=1 AND trashed_at IS NULL FROM contact_profiles WHERE id='same-delete-profile'`, &tombstone},
+			{`SELECT trashed_at IS NOT NULL FROM contact_profiles WHERE id='same-delete-profile'`, &trashed},
 			{`SELECT COUNT(*) FROM contact_cards WHERE profile_id='same-delete-profile' AND kind='provider'`, &gotCards},
 			{`SELECT COUNT(*) FROM contact_observations WHERE profile_id='same-delete-profile' AND is_suppressed=1 AND suppress_auto_create=1`, &suppressed},
 			{`SELECT COUNT(*) FROM contact_sync_operations WHERE contact_id='same-delete-profile' AND status IN ('pending','running')`, &queue},
@@ -196,7 +200,8 @@ func assertContactDeleteHTTPState(t *testing.T, f *userStorageFixture, owner str
 				return err
 			}
 		}
-		if (tombstone == 1) != deleted || gotCards != cards || (suppressed == 1) != deleted || (events == 1) != deleted || (queue == 0) != deleted {
+		// Moving it to the Trash already stopped its pending pushes.
+		if (tombstone == 1) != deleted || gotCards != cards || (suppressed == 1) != deleted || (events == 1) != deleted || (queue == 0) != (deleted || trashed == 1) {
 			t.Fatalf("%s deletion state: tombstone=%d cards=%d suppressed=%d queue=%d events=%d", owner, tombstone, gotCards, suppressed, queue, events)
 		}
 		return nil
@@ -220,7 +225,7 @@ func TestUserContactDeleteHTTPScopedRefreshAndOwnerIsolation(t *testing.T) {
 				t.Fatal(err)
 			}
 			response := requestContactDelete(f, "alice")
-			if response.Code != 303 || response.Header().Get("Location") != "/contacts" {
+			if response.Code != 303 || response.Header().Get("Location") != "/contacts?trash=1" {
 				t.Fatal("delete response", response.Code, response.Body.String())
 			}
 			assertContactDeleteHTTPState(t, f, "alice", 0, true)

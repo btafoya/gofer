@@ -18,9 +18,9 @@ import (
 // the selection take at once.
 const contactSelectionLimit = 10000
 
-// contactBulkDeleteLimit caps one bulk delete request. Each synced contact is
-// removed from its address books one by one, so the list sends a large
-// selection in several requests.
+// contactBulkDeleteLimit caps one request to delete contacts for good. Each
+// synced contact is removed from its address books one by one, so the list
+// sends a large selection in several requests.
 const contactBulkDeleteLimit = 100
 
 // postedContactIDs reads the distinct contact ids a form posts as "id", and
@@ -122,8 +122,8 @@ func (h *Handler) handleExportSelectedContacts(w http.ResponseWriter, r *http.Re
 	serveVCard(w, filename, contacts)
 }
 
-// contactBulkDeleteResult says what a bulk delete did: how many contacts went,
-// and why each of the others didn't.
+// contactBulkDeleteResult says what deleting contacts for good did: how many
+// went, and why each of the others didn't.
 type contactBulkDeleteResult struct {
 	Deleted int                    `json:"deleted"`
 	Failed  []contactDeleteFailure `json:"failed"`
@@ -152,6 +152,8 @@ func contactDeleteFailureMessage(id string, err error) string {
 		return "Its address book refused: " + err.Error()
 	case errors.Is(err, storage.ErrContactEditChanged), errors.Is(err, config.ErrAccountServicesChanged):
 		return "It changed while being deleted. Reload and try again."
+	case errors.Is(err, errContactNotInTrash):
+		return "It was restored from the Trash."
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return "Deleting it took too long. Try again."
 	}
@@ -165,43 +167,4 @@ func writeContactBulkDeleteResult(w http.ResponseWriter, result contactBulkDelet
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(result)
-}
-
-// handleDeleteContacts deletes the posted contacts as deleting each alone
-// would, going on past any that fail.
-func (h *Handler) handleDeleteContacts(w http.ResponseWriter, r *http.Request) {
-	ids, ok := postedContactIDs(w, r, contactBulkDeleteLimit)
-	if !ok {
-		return
-	}
-	ctx := r.Context()
-	userID := h.userID(ctx)
-	var result contactBulkDeleteResult
-	for _, id := range ids {
-		result.record(id, h.deleteContact(ctx, userID, id))
-	}
-	writeContactBulkDeleteResult(w, result)
-}
-
-// handleUserDeleteContacts is handleDeleteContacts with per-user storage:
-// each contact goes as handleUserDeleteContact deletes one.
-func (h *Handler) handleUserDeleteContacts(w http.ResponseWriter, r *http.Request) {
-	ids, ok := postedContactIDs(w, r, contactBulkDeleteLimit)
-	if !ok {
-		return
-	}
-	owner := h.userID(r.Context())
-	var result contactBulkDeleteResult
-	err := h.userIMAP.RunUserServiceWork(r.Context(), owner, func(ctx context.Context) error {
-		for _, id := range ids {
-			_, err := h.deleteUserContact(ctx, owner, id)
-			result.record(id, err)
-		}
-		return nil
-	})
-	if err != nil && result.Deleted == 0 && len(result.Failed) == 0 {
-		userContactEditError(w, r, err)
-		return
-	}
-	writeContactBulkDeleteResult(w, result)
 }

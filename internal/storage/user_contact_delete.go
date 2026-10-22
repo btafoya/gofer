@@ -185,7 +185,7 @@ func (db *DB) AcknowledgeUserContactDeleteSource(ctx context.Context, s *Contact
 	if err != nil {
 		return nil, err
 	}
-	if next.profile == nil || next.profile.IsDeleted {
+	if next.profile == nil || (next.profile.IsDeleted && next.profile.TrashedAt == "") {
 		return nil, ErrContactEditChanged
 	}
 	next.state, err = contactEditState(next.profile)

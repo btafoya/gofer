@@ -465,7 +465,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /search", h.handleSearch)
 	mux.HandleFunc("GET /api/contacts/export", h.handleExportContacts)
 	mux.HandleFunc("POST /api/contacts/export", h.handleExportSelectedContacts)
-	mux.HandleFunc("POST /api/contacts/bulk-delete", h.handleDeleteContacts)
+	mux.HandleFunc("POST /api/contacts/bulk-delete", h.handleTrashContacts)
+	mux.HandleFunc("POST /api/contacts/trash/restore", h.handleRestoreContacts)
+	mux.HandleFunc("POST /api/contacts/trash/delete", h.handleDeleteContactsForever)
 	mux.HandleFunc("GET /api/contacts/ids", h.handleContactIDs)
 	mux.HandleFunc("GET /api/contacts/{id}/export", h.handleExportContact)
 	mux.HandleFunc("GET /api/contacts/search", h.handleContactSearch)
@@ -478,6 +480,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/contacts/import", h.handleImportContacts)
 	mux.HandleFunc("POST /api/contacts/{id}/unify", h.handleUnifyContact)
 	mux.HandleFunc("POST /api/contacts/{id}/delete", h.handleDeleteContact)
+	mux.HandleFunc("POST /api/contacts/{id}/delete-forever", h.handleDeleteContactForever)
 	mux.HandleFunc("POST /api/accounts/discover", h.handleDiscoverAccount)
 	mux.HandleFunc("GET /api/accounts/server-check", h.handleAccountServerCheck)
 	mux.HandleFunc("POST /api/accounts/test", h.handleTestNewAccount)
@@ -1054,6 +1057,7 @@ func (h *Handler) parseContactFilters(r *http.Request) models.ContactFilters {
 		View:       contactViewMode(q.Get("view")),
 		SortBy:     strings.TrimSpace(q.Get("sort_by")),
 		SortOrder:  strings.TrimSpace(q.Get("sort_order")),
+		Trash:      q.Get("trash") == "1",
 	}
 	if filters.Source != "manual" && filters.Source != "observed" && filters.Source != "synced" && !strings.HasPrefix(filters.Source, "synced:") && !strings.HasPrefix(filters.Source, "book:") {
 		filters.Source = ""
@@ -1118,6 +1122,13 @@ func (h *Handler) handleSaveContact(w http.ResponseWriter, r *http.Request) {
 	}
 	var previous *models.Contact
 	if contact.ID != "" {
+		if trashed, err := h.db.ContactInTrash(ctx, userID, contact.ID); err != nil {
+			http.Error(w, "save failed", http.StatusInternalServerError)
+			return
+		} else if trashed {
+			http.Error(w, "Restore this contact from the Trash to edit it.", http.StatusConflict)
+			return
+		}
 		previous, _ = h.db.GetContact(ctx, userID, contact.ID)
 	}
 	setupRequired := contactSyncSetupRequired(contact, previous)
@@ -1474,32 +1485,18 @@ func (h *Handler) handleUnifyContact(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, location, http.StatusSeeOther)
 }
 
-func (h *Handler) handleDeleteContact(w http.ResponseWriter, r *http.Request) {
-	err := h.deleteContact(r.Context(), h.userID(r.Context()), r.PathValue("id"))
-	var syncErr contactSyncDeleteError
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		http.NotFound(w, r)
-	case errors.As(err, &syncErr):
-		http.Error(w, "Contact sync delete failed: "+syncErr.err.Error(), http.StatusBadGateway)
-	case err != nil:
-		http.Error(w, "delete failed", http.StatusInternalServerError)
-	default:
-		http.Redirect(w, r, "/contacts", http.StatusSeeOther)
-	}
-}
-
 // contactSyncDeleteError is a contact's address book refusing its deletion.
 type contactSyncDeleteError struct{ err error }
 
 func (e contactSyncDeleteError) Error() string { return e.err.Error() }
 func (e contactSyncDeleteError) Unwrap() error { return e.err }
 
-// deleteContact deletes a contact of the user, first from the address books
-// it syncs with, then from Gofer. It gives sql.ErrNoRows for a contact the
-// user doesn't have, and contactSyncDeleteError when an address book refuses.
+// deleteContact deletes a contact of the user for good, in the Trash or not:
+// first from the address books it syncs with, then from Gofer. It gives
+// sql.ErrNoRows for a contact the user doesn't have, and
+// contactSyncDeleteError when an address book refuses.
 func (h *Handler) deleteContact(ctx context.Context, userID, id string) error {
-	contact, err := h.db.GetContact(ctx, userID, id)
+	contact, err := h.db.GetContactIncludingTrash(ctx, userID, id)
 	if err != nil {
 		return err
 	}

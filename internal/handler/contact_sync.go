@@ -15,6 +15,7 @@ func (h *Handler) StartContactSync(ctx context.Context) {
 		log.Printf("contacts sync: startup sync started")
 		h.SyncContactsForAllAccounts(ctx)
 		log.Printf("contacts sync: startup sync finished")
+		h.purgeAllContactTrash(ctx)
 
 		for {
 			interval := h.contactSyncInterval(ctx)
@@ -23,6 +24,7 @@ func (h *Handler) StartContactSync(ctx context.Context) {
 				return
 			case <-time.After(interval):
 				h.SyncContactsForAllAccounts(ctx)
+				h.purgeAllContactTrash(ctx)
 			}
 		}
 	}()

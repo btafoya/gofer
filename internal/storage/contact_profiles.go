@@ -77,7 +77,7 @@ func saveContactProfileTx(ctx context.Context, tx *sql.Tx, userID string, profil
 			sync_enabled = excluded.sync_enabled,
 			is_deleted = excluded.is_deleted,
 			updated_at = CURRENT_TIMESTAMP
-		WHERE contact_profiles.user_id = excluded.user_id`,
+		WHERE contact_profiles.user_id = excluded.user_id AND contact_profiles.trashed_at IS NULL`,
 		profile.ID, profile.UserID, profile.DisplayName, profile.SortName, profile.PrimaryEmail, strings.TrimSpace(profile.AvatarURL), strings.TrimSpace(profile.Notes), profile.Origin, boolInt(profile.SyncEnabled), boolInt(profile.IsDeleted))
 	if err != nil {
 		return models.ContactProfile{}, err
