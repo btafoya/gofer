@@ -280,3 +280,36 @@ func TestUnifyContactJSONRequestsDetailRefresh(t *testing.T) {
 		t.Fatalf("location = %v, want contact URL", body["location"])
 	}
 }
+
+// An address-book sync leaves a contact in the Trash alone: its copy there
+// doesn't come back as a new contact.
+func TestInboundSyncLeavesATrashedContactAlone(t *testing.T) {
+	ctx := context.Background()
+	db, err := storage.New(filepath.Join(t.TempDir(), "gofer.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.Write().Exec(`INSERT OR IGNORE INTO users (id, username, username_normalized) VALUES ('default', 'default', 'default');
+		INSERT INTO accounts (id, user_id, provider, email_address) VALUES ('acc-source', 'default', 'gmail', 'source@example.com')`); err != nil {
+		t.Fatal(err)
+	}
+	h := &Handler{db: db}
+	contactID, _, err := h.upsertInboundSyncedContact(ctx, "default", "gmail", "acc-source", "people/c9", models.Contact{Name: "Pia Rowe", Email: "pia@example.com"})
+	if err != nil || contactID == "" {
+		t.Fatalf("first sync = %q, %v", contactID, err)
+	}
+	if err := db.UpsertContactSource(ctx, storage.ContactSource{ContactID: contactID, UserID: "default", Provider: "gmail", AccountID: "acc-source", RemoteID: "people/c9"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.TrashContacts(ctx, "default", []string{contactID}); err != nil {
+		t.Fatal(err)
+	}
+	again, changed, err := h.upsertInboundSyncedContact(ctx, "default", "gmail", "acc-source", "people/c9", models.Contact{Name: "Pia Rowe-Hart", Email: "pia@example.com"})
+	if err != nil || again != "" || changed {
+		t.Fatalf("sync of a trashed contact = %q, %v, %v; want it skipped", again, changed, err)
+	}
+	if count, err := db.CountContacts(ctx, "default", models.ContactFilters{}); err != nil || count != 0 {
+		t.Fatalf("active contacts = %d, %v; want no duplicate", count, err)
+	}
+}

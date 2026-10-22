@@ -73,6 +73,14 @@ func (db *DB) publishInboundContacts(ctx context.Context, owner, account, provid
 		if err != nil {
 			return nil, err
 		}
+		// A contact in the Trash still has its address-book copy; leave it
+		// alone rather than bring it back as a new contact.
+		if trashed, err := contactInTrash(ctx, tx, owner, preferred); err != nil {
+			return nil, err
+		} else if trashed {
+			results = append(results, InboundContactResult{})
+			continue
+		}
 		id, created, changed, err := upsertSyncedContactTx(ctx, tx, owner, account, preferred, input.Contact)
 		if err != nil {
 			return nil, err

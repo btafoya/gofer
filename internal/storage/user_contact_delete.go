@@ -57,7 +57,8 @@ func (db *DB) SnapshotUserContactDelete(ctx context.Context, owner, id string, g
 	if err != nil {
 		return nil, err
 	}
-	if profile == nil || profile.IsDeleted {
+	// A contact is deleted for good either directly or from the Trash.
+	if profile == nil || (profile.IsDeleted && profile.TrashedAt == "") {
 		return nil, sql.ErrNoRows
 	}
 	s := &ContactDeleteSnapshot{owner: owner, id: profile.ID, profile: profile}
@@ -217,7 +218,7 @@ func (db *DB) FinishUserContactDelete(ctx context.Context, s *ContactDeleteSnaps
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM contact_fields WHERE user_id=? AND profile_id=? AND source='manual'`, s.owner, s.id).Scan(&manual); err != nil {
 		return "", err
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE contact_profiles SET is_deleted=1,updated_at=CURRENT_TIMESTAMP WHERE user_id=? AND id=? AND is_deleted=0`, s.owner, s.id)
+	result, err := tx.ExecContext(ctx, `UPDATE contact_profiles SET is_deleted=1,trashed_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE user_id=? AND id=? AND (is_deleted=0 OR trashed_at IS NOT NULL)`, s.owner, s.id)
 	if err != nil {
 		return "", err
 	}

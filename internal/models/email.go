@@ -107,24 +107,26 @@ type Contact struct {
 	Source                string
 	IsManual              bool
 	IsDeleted             bool
-	MessageCount          int
-	CreatedAt             string
-	LastSeenAt            string
-	UpdatedAt             string
-	LastSeenSort          string
-	UpdatedSort           string
-	SaveTargets           []string
-	AvatarHash            string
-	AvatarStatus          string
-	AvatarSource          string
-	AvatarURL             string
-	AvatarDataURL         string
-	RemoveAvatar          bool
-	GoferSyncEnabled      bool
-	SourceBooks           []ContactAddressBook
-	SyncStatus            string
-	SyncError             string
-	SyncUpdatedAt         string
+	// TrashedAt is when the contact went to the Trash, formatted for showing.
+	TrashedAt        string
+	MessageCount     int
+	CreatedAt        string
+	LastSeenAt       string
+	UpdatedAt        string
+	LastSeenSort     string
+	UpdatedSort      string
+	SaveTargets      []string
+	AvatarHash       string
+	AvatarStatus     string
+	AvatarSource     string
+	AvatarURL        string
+	AvatarDataURL    string
+	RemoveAvatar     bool
+	GoferSyncEnabled bool
+	SourceBooks      []ContactAddressBook
+	SyncStatus       string
+	SyncError        string
+	SyncUpdatedAt    string
 }
 
 // FallbackName is what a contact is called when it has no name: its email
@@ -203,6 +205,8 @@ type ContactAddressBook struct {
 }
 
 type ContactFilters struct {
+	// Trash lists the contacts in the Trash instead of the others.
+	Trash      bool
 	Query      string
 	WithEmail  bool // only contacts that can be written to, for address suggestions
 	Source     string

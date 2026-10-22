@@ -482,7 +482,7 @@ func (db *DB) listProfileContacts(ctx context.Context, userID string, filters mo
 		       CASE WHEN p.origin = 'manual' THEN 1 ELSE 0 END AS is_manual,
 		       COALESCE((SELECT SUM(co.message_count) FROM contact_observations co WHERE co.user_id = p.user_id AND co.profile_id = p.id AND co.is_suppressed = 0), 0) AS message_count,
 		       (SELECT MAX(co.last_seen_at) FROM contact_observations co WHERE co.user_id = p.user_id AND co.profile_id = p.id AND co.is_suppressed = 0) AS last_seen_at,
-		       p.created_at, p.updated_at
+		       p.created_at, p.updated_at, p.trashed_at
 		FROM contact_profiles p
 		WHERE `+where+`
 		ORDER BY `+contactListOrderSQL(filters, true)+`
@@ -538,6 +538,9 @@ func profileContactsIncluded(filters models.ContactFilters) bool {
 func contactProfileFilterSQL(userID string, filters models.ContactFilters) (string, []any) {
 	query := strings.TrimSpace(filters.Query)
 	where := `p.user_id = ? AND p.is_deleted = 0`
+	if filters.Trash {
+		where = `p.user_id = ? AND p.is_deleted = 1 AND p.trashed_at IS NOT NULL`
+	}
 	args := []any{userID}
 	if query != "" {
 		where += ` AND (p.display_name LIKE ? OR p.primary_email LIKE ? OR EXISTS (
@@ -604,9 +607,12 @@ func scanProfileContactRow(scanner interface{ Scan(dest ...any) error }, loc *ti
 	var isDeleted, isManual int
 	var messageCount int
 	var source string
-	var lastSeen, createdAt, updatedAt sql.NullString
-	if err := scanner.Scan(&c.ID, &c.Name, &c.Email, &c.Phone, &c.AvatarURL, &isDeleted, &source, &isManual, &messageCount, &lastSeen, &createdAt, &updatedAt); err != nil {
+	var lastSeen, createdAt, updatedAt, trashedAt sql.NullString
+	if err := scanner.Scan(&c.ID, &c.Name, &c.Email, &c.Phone, &c.AvatarURL, &isDeleted, &source, &isManual, &messageCount, &lastSeen, &createdAt, &updatedAt, &trashedAt); err != nil {
 		return c, err
+	}
+	if trashedAt.Valid {
+		c.TrashedAt = formatContactTime(trashedAt.String, loc)
 	}
 	c.Source = source
 	c.IsManual = isManual == 1
@@ -841,6 +847,17 @@ func (db *DB) GetContact(ctx context.Context, userID, contactID string) (*models
 }
 
 func (db *DB) GetContactWithProfile(ctx context.Context, userID, contactID string) (*models.Contact, *models.ContactProfile, error) {
+	return db.getContactWithProfile(ctx, userID, contactID, false)
+}
+
+// GetContactIncludingTrash is GetContact that also finds a contact in the
+// Trash, which is shown read-only, to restore or delete for good.
+func (db *DB) GetContactIncludingTrash(ctx context.Context, userID, contactID string) (*models.Contact, error) {
+	contact, _, err := db.getContactWithProfile(ctx, userID, contactID, true)
+	return contact, err
+}
+
+func (db *DB) getContactWithProfile(ctx context.Context, userID, contactID string, includeTrash bool) (*models.Contact, *models.ContactProfile, error) {
 	if contactID == "" {
 		return nil, nil, nil
 	}
@@ -848,7 +865,7 @@ func (db *DB) GetContactWithProfile(ctx context.Context, userID, contactID strin
 	if err != nil {
 		return nil, nil, err
 	}
-	if profile == nil || profile.IsDeleted {
+	if profile == nil || (profile.IsDeleted && !(includeTrash && profile.TrashedAt != "")) {
 		return nil, nil, nil
 	}
 	contact, err := db.contactFromProfile(ctx, userID, *profile)
@@ -2461,7 +2478,7 @@ func (db *DB) DeleteContact(ctx context.Context, userID, contactID string, preve
 	}
 	res, err := tx.ExecContext(ctx, `
 		UPDATE contact_profiles
-		SET is_deleted = 1, updated_at = CURRENT_TIMESTAMP
+		SET is_deleted = 1, trashed_at = NULL, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ? AND user_id = ?`, contactID, userID)
 	if err != nil {
 		return err
@@ -2730,6 +2747,18 @@ func (db *DB) upsertObservedContactTx(ctx context.Context, tx *sql.Tx, userID, n
 	} else {
 		if !settings.AutoCreateObserved && isSuppressed == 1 {
 			return false, nil
+		}
+		// A contact in the Trash stays there: new mail only counts toward it.
+		trashed, trashErr := contactInTrash(ctx, tx, userID, profileID)
+		if trashErr != nil {
+			return false, trashErr
+		}
+		if trashed {
+			_, err := tx.ExecContext(ctx, `
+				UPDATE contact_observations
+				SET message_count = message_count + ?, last_seen_at = MAX(COALESCE(last_seen_at, ?), ?), updated_at = CURRENT_TIMESTAMP
+				WHERE user_id = ? AND normalized_email = ?`, count, seenAt, seenAt, userID, normalized)
+			return false, err
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE contact_profiles SET is_deleted = 0, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND id = ?`, userID, profileID); err != nil {
 			return false, err

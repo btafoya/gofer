@@ -358,6 +358,11 @@ func (h *Handler) upsertInboundSyncedContact(ctx context.Context, userID, provid
 		if source != nil {
 			profileID = source.ContactID
 		}
+		// A contact in the Trash still has its address-book copy; leave it
+		// alone rather than bring it back as a new contact.
+		if trashed, err := h.db.ContactInTrash(ctx, userID, profileID); err != nil || trashed {
+			return "", false, err
+		}
 	}
 	contactID, _, canonicalChanged, err := h.db.UpsertSyncedContactForProfileWithChange(ctx, userID, accountID, profileID, contact)
 	return contactID, canonicalChanged, err

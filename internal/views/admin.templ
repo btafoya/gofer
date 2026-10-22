@@ -2184,6 +2184,10 @@ func adminContactEventLabel(eventType string) string {
 		return "Contact deleted"
 	case "observed_contacts_deleted":
 		return "Discovered contacts deleted"
+	case "contacts_trashed":
+		return "Contacts moved to Trash"
+	case "contacts_restored":
+		return "Contacts restored"
 	default:
 		return strings.Title(strings.ReplaceAll(eventType, "_", " "))
 	}
@@ -2193,9 +2197,9 @@ func adminContactEventClass(eventType string) string {
 	switch eventType {
 	case "backfill_forced", "backfill_started":
 		return "bg-amber-500/12 text-amber-700 dark:text-amber-300"
-	case "backfill_completed", "manual_contact_added", "observed_contact_added":
+	case "backfill_completed", "manual_contact_added", "observed_contact_added", "contacts_restored":
 		return "bg-emerald-500/12 text-emerald-700 dark:text-emerald-300"
-	case "contact_deleted", "observed_contacts_deleted":
+	case "contact_deleted", "observed_contacts_deleted", "contacts_trashed":
 		return "bg-red-500/12 text-red-700 dark:text-red-300"
 	default:
 		return "bg-muted text-muted-foreground"

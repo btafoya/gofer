@@ -1169,8 +1169,12 @@ CREATE TABLE IF NOT EXISTS contact_profiles (
     sync_enabled INTEGER NOT NULL DEFAULT 0,
     is_deleted INTEGER NOT NULL DEFAULT 0,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    trashed_at DATETIME
 );
+
+CREATE INDEX IF NOT EXISTS idx_contact_profiles_trash
+ON contact_profiles(user_id, trashed_at) WHERE trashed_at IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_contact_profiles_user_name
 ON contact_profiles(user_id, is_deleted, sort_name COLLATE NOCASE, display_name COLLATE NOCASE);
@@ -1677,4 +1681,4 @@ CREATE TABLE IF NOT EXISTS calendar_invitation_messages (
 );
 
 -- Schema version marker for fresh installs
-INSERT OR REPLACE INTO schema_version (version) VALUES (122);
+INSERT OR REPLACE INTO schema_version (version) VALUES (123);

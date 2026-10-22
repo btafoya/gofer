@@ -228,9 +228,9 @@ func contactProfileRow(ctx context.Context, query contactProfileQuery, userID, p
 	var profile models.ContactProfile
 	var syncEnabled, isDeleted int
 	err := query.QueryRowContext(ctx, `
-		SELECT id, user_id, display_name, sort_name, primary_email, avatar_url, notes, origin, sync_enabled, is_deleted, created_at, updated_at
+		SELECT id, user_id, display_name, sort_name, primary_email, avatar_url, notes, origin, sync_enabled, is_deleted, created_at, updated_at, COALESCE(trashed_at, '')
 		FROM contact_profiles
-		WHERE user_id = ? AND id = ?`, userID, profileID).Scan(&profile.ID, &profile.UserID, &profile.DisplayName, &profile.SortName, &profile.PrimaryEmail, &profile.AvatarURL, &profile.Notes, &profile.Origin, &syncEnabled, &isDeleted, &profile.CreatedAt, &profile.UpdatedAt)
+		WHERE user_id = ? AND id = ?`, userID, profileID).Scan(&profile.ID, &profile.UserID, &profile.DisplayName, &profile.SortName, &profile.PrimaryEmail, &profile.AvatarURL, &profile.Notes, &profile.Origin, &syncEnabled, &isDeleted, &profile.CreatedAt, &profile.UpdatedAt, &profile.TrashedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
