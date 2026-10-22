@@ -1,0 +1,17 @@
+Gofer {{ .Chart.AppVersion }} is deployed as {{ include "gofer.fullname" . }}.
+
+Public URL: {{ .Values.config.baseUrl }}
+{{- if not (or .Values.ingress.enabled .Values.httpRoute.enabled) }}
+
+No ingress or HTTPRoute is enabled. Reach Gofer locally with:
+  kubectl port-forward svc/{{ include "gofer.fullname" . }} 8090:{{ .Values.service.port }} -n {{ .Release.Namespace }}
+{{- end }}
+
+First run: Gofer prints a one-time setup token in the logs unless secret.setupToken is set.
+  kubectl logs deploy/{{ include "gofer.fullname" . }} -n {{ .Release.Namespace }} | grep setup_token
+
+Operational notes:
+- Gofer runs exactly one replica on a single SQLite volume. Upgrades stop the pod before starting the new one (strategy Recreate).
+- Back up the data volume (gofer.db, secret.key, VAPID keys, accounts/) before upgrades.
+- Losing GOFER_SECRET_KEY makes stored credentials unreadable. Keep it in your secret manager.
+- Run `helm test {{ .Release.Name }} -n {{ .Release.Namespace }}` to check the service answers.

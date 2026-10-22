@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["config"],
+  "properties": {
+    "config": {
+      "type": "object",
+      "required": ["baseUrl"],
+      "properties": {
+        "baseUrl": {
+          "type": "string",
+          "pattern": "^(https?://[^/]+)?$"
+        },
+        "authMode": {
+          "type": "string",
+          "enum": ["open", "personal", "managed"]
+        },
+        "goEnv": {
+          "type": "string"
+        }
+      }
+    },
+    "probes": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["tcp", "http"]
+        }
+      }
+    },
+    "persistence": {
+      "type": "object",
+      "properties": {
+        "accessMode": {
+          "type": "string",
+          "enum": ["ReadWriteOnce", "ReadWriteOncePod"]
+        }
+      }
+    },
+    "service": {
+      "type": "object",
+      "properties": {
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        }
+      }
+    }
+  }
+}

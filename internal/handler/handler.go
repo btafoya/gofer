@@ -4608,6 +4608,7 @@ func (h *Handler) handleSSE(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
 
 	userID := h.userID(r.Context())
 	currentUser := auth.GetCurrentUser(r.Context())
@@ -4638,6 +4639,8 @@ func (h *Handler) handleSSE(w http.ResponseWriter, r *http.Request) {
 	defer events.Close()
 	ticker := time.NewTicker(1200 * time.Millisecond)
 	defer ticker.Stop()
+	keepalive := time.NewTicker(sseKeepaliveInterval)
+	defer keepalive.Stop()
 	lastProcessingActive := false
 
 	fmt.Fprintf(w, "event: connected\ndata: {}\n\n")
@@ -4659,6 +4662,10 @@ func (h *Handler) handleSSE(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
 			return
+		case <-keepalive.C:
+			// Comment lines keep idle proxies from closing the stream.
+			fmt.Fprint(w, ": ping\n\n")
+			flusher.Flush()
 		case <-ticker.C:
 			if !isAdmin {
 				continue

@@ -264,9 +264,40 @@ func configuredSyncCapacity() (mail.UserIMAPBackgroundOptions, error) {
 	return options, nil
 }
 
+const defaultShutdownTimeout = 20 * time.Second
+
+// configuredShutdownTimeout bounds how long in-flight requests may drain on
+// shutdown. Keep it under the pod's terminationGracePeriodSeconds.
+func configuredShutdownTimeout() (time.Duration, error) {
+	raw := strings.TrimSpace(os.Getenv("GOFER_SHUTDOWN_TIMEOUT"))
+	if raw == "" {
+		return defaultShutdownTimeout, nil
+	}
+	timeout, err := time.ParseDuration(raw)
+	if err != nil || timeout <= 0 {
+		return 0, errors.New("GOFER_SHUTDOWN_TIMEOUT must be a positive duration such as 20s")
+	}
+	return timeout, nil
+}
+
+// ready reports readiness: the central database answers and the process is not draining.
+func (app *managedApplication) ready(ctx context.Context) error {
+	app.requestMu.Lock()
+	closing := app.closing
+	app.requestMu.Unlock()
+	if closing {
+		return errors.New("shutting down")
+	}
+	return app.storage.central.Read().PingContext(ctx)
+}
+
 // RunManaged runs managed mode on per-user storage until ctx is canceled.
 func RunManaged(ctx context.Context, stdout, stderr io.Writer) (err error) {
 	maxOpen, err := configuredUserDatabaseLimit()
+	if err != nil {
+		return err
+	}
+	shutdownTimeout, err := configuredShutdownTimeout()
 	if err != nil {
 		return err
 	}
@@ -288,7 +319,7 @@ func RunManaged(ctx context.Context, stdout, stderr io.Writer) (err error) {
 	if err != nil {
 		return err
 	}
-	server := newHTTPServer(app)
+	server := newHTTPServer(withHealth(app, app.ready))
 	server.BaseContext = func(net.Listener) context.Context { return app.ctx }
 	defer server.Close()
 	if _, err := fmt.Fprintf(stdout, "Gofer running on %s\nlistening on %s\ndatabase: %s\nauth: managed\n", app.httpConfig.BaseURL, listener.Addr(), app.storage.central.Path()); err != nil {
@@ -309,7 +340,7 @@ func RunManaged(ctx context.Context, stdout, stderr io.Writer) (err error) {
 		}
 		return err
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		err := server.Shutdown(shutdownCtx)
 		if err != nil {

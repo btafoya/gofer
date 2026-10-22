@@ -72,4 +72,7 @@ WORKDIR /data
 VOLUME /data
 EXPOSE 8090
 
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+    CMD ["gofer", "healthcheck"]
+
 ENTRYPOINT ["gofer"]

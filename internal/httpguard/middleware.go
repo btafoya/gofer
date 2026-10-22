@@ -8,6 +8,7 @@ import (
 func (c *Config) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		setSecurityHeaders(w)
+		r = c.withClientAddress(r)
 
 		if !c.trustsHost(r.Host) {
 			http.Error(w, "request host is not trusted", http.StatusMisdirectedRequest)

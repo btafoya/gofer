@@ -26,10 +26,9 @@ func main() {
 				fmt.Fprintf(os.Stderr, "Gofer startup or shutdown failed: %v\n", err)
 				serverExit = 1
 			}
-		} else {
-			// The shared runtime retains its existing signal behavior.
-			stop()
-			server.RunShared()
+		} else if err := server.RunShared(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "Gofer startup or shutdown failed: %v\n", err)
+			serverExit = 1
 		}
 	})
 	if exitCode == 0 {
@@ -43,6 +42,7 @@ func main() {
 const usage = `Usage:
   gofer                 start the server
   gofer help            show this help
+  gofer healthcheck     probe the local /healthz endpoint (container HEALTHCHECK)
 
 Authentication:
   gofer auth status
@@ -67,6 +67,13 @@ func runApplication(ctx context.Context, args []string, stdout, stderr io.Writer
 	}
 	if handled, exitCode := server.RunStorageCommand(ctx, args, stdout, stderr); handled {
 		return exitCode
+	}
+	if len(args) == 1 && args[0] == "healthcheck" {
+		if err := server.ProbeHealth(os.Getenv("GOFER_ADDR")); err != nil {
+			_, _ = fmt.Fprintf(stderr, "gofer: unhealthy: %v\n", err)
+			return 1
+		}
+		return 0
 	}
 	if len(args) != 0 {
 		_, _ = fmt.Fprintf(stderr, "gofer: unknown command %q\n\n", strings.Join(args, " "))
