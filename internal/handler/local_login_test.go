@@ -586,6 +586,14 @@ func TestDirectLoginSourceUsesOnlyTransportPeer(t *testing.T) {
 	}
 }
 
+func TestLoginSourceFallsBackToTransportPeer(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/login", nil)
+	request.RemoteAddr = "198.51.100.8:42100"
+	if got := loginSource(request); got != "198.51.100.8" {
+		t.Fatalf("loginSource() = %q, want transport peer", got)
+	}
+}
+
 func TestLocalLoginRejectsOversizedForm(t *testing.T) {
 	handler, _, _ := newLocalLoginHandler(t, auth.UserStatusActive, false, false, false, false)
 	request := httptest.NewRequest(http.MethodPost, "/login", io.LimitReader(strings.NewReader(strings.Repeat("x", loginFormMaximumBytes+1)), loginFormMaximumBytes+1))
