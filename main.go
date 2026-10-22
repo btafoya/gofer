@@ -26,10 +26,9 @@ func main() {
 				fmt.Fprintf(os.Stderr, "Gofer startup or shutdown failed: %v\n", err)
 				serverExit = 1
 			}
-		} else {
-			// The shared runtime retains its existing signal behavior.
-			stop()
-			server.RunShared()
+		} else if err := server.RunShared(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "Gofer startup or shutdown failed: %v\n", err)
+			serverExit = 1
 		}
 	})
 	if exitCode == 0 {

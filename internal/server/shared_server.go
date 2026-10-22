@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"github.com/cristianadrielbraun/gofer/internal/auth"
 	"github.com/cristianadrielbraun/gofer/internal/config"
@@ -35,10 +36,15 @@ func ConfiguredDatabasePath() string {
 	return "data/gofer.db"
 }
 
-// RunShared runs the open and personal modes on the single shared database.
-func RunShared() {
+// RunShared runs the open and personal modes on the single shared database
+// until rootCtx is canceled, then drains requests and closes storage.
+func RunShared(rootCtx context.Context) error {
 	log.Printf("boot: loading configuration")
 
+	shutdownTimeout, err := configuredShutdownTimeout()
+	if err != nil {
+		log.Fatalf("invalid shutdown configuration: %v", err)
+	}
 	httpConfig, err := httpguard.LoadConfig()
 	if err != nil {
 		log.Fatalf("invalid HTTP configuration: %v", err)
@@ -132,7 +138,7 @@ func RunShared() {
 		log.Fatalf("failed to secure stored mailbox passwords: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(rootCtx)
 	defer cancel()
 
 	if authManager.IsEnabled() {
@@ -228,11 +234,29 @@ func RunShared() {
 	}
 	listener, err := net.Listen("tcp", httpConfig.ListenAddr)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	openBrowserIfEnabled(httpConfig.BaseURL)
 	server := newHTTPServer(handler)
-	log.Fatal(server.Serve(listener))
+	finished := make(chan error, 1)
+	go func() { finished <- server.Serve(listener) }()
+	select {
+	case err := <-finished:
+		return err
+	case <-rootCtx.Done():
+	}
+	// Stop background workers first, then let in-flight requests finish.
+	cancel()
+	shutdownCtx, release := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer release()
+	err = server.Shutdown(shutdownCtx)
+	if err != nil {
+		err = errors.Join(err, server.Close())
+	}
+	if serveErr := <-finished; !errors.Is(serveErr, http.ErrServerClosed) {
+		err = errors.Join(err, serveErr)
+	}
+	return err
 }
 
 func loadOrGenerateVAPIDKeys(privatePath, publicPath string) (string, string) {

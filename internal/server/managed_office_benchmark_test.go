@@ -54,15 +54,17 @@ func TestManagedOfficeBenchmarkProcess(t *testing.T) {
 			}
 		}()
 	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	if mode == "shared" {
-		RunShared()
+		if err := RunShared(ctx); err != nil {
+			t.Fatal(err)
+		}
 		return
 	}
 	if mode != "per-user" {
 		t.Fatal("unknown office child layout")
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	if err := RunManaged(ctx, os.Stdout, os.Stderr); err != nil {
 		t.Fatal(err)
 	}
