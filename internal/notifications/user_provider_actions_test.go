@@ -23,6 +23,7 @@ type providerActionAPI struct {
 	mu                             sync.Mutex
 	provider                       string
 	calls                          map[string]int
+	batched                        map[string]int // changes sent in a batch, per message
 	read, star                     map[string]bool
 	parent                         map[string]string
 	blockOwner                     string
@@ -91,6 +92,10 @@ func (a *providerActionAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "throttled", 429)
 		return
 	}
+	if r.Method == "POST" && r.URL.Path == "/$batch" {
+		a.serveGraphBatch(w, owner, wire, missing)
+		return
+	}
 	if missing {
 		http.Error(w, "gone", 404)
 		return
@@ -101,6 +106,13 @@ func (a *providerActionAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if batch, ok := strings.CutPrefix(r.URL.Path, "/users/me/messages/batch"); ok {
+		var ids []string
+		_ = json.Unmarshal(payload["ids"], &ids)
+		for _, id := range ids {
+			a.batched[owner+"|batch"+batch+"|"+id]++
+		}
+	}
 	if a.attachmentAPI && a.serveAttachmentLocked(w, r, owner) {
 		return
 	}
@@ -268,19 +280,61 @@ func (a *providerActionAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				a.appliedLabels[owner][name] = true
 			}
 		}
-		// Decode through a temporary because map elements cannot be addressed.
-		if raw, ok := payload["isRead"]; ok {
-			var read bool
-			_ = json.Unmarshal(raw, &read)
-			a.read[owner] = read
-		}
-		if raw, ok := payload["flag"]; ok {
-			var flag map[string]string
-			_ = json.Unmarshal(raw, &flag)
-			a.star[owner] = flag["flagStatus"] == "flagged"
-		}
+		a.applyOutlookFlagsLocked(owner, payload)
 		_, _ = fmt.Fprint(w, `{}`)
 	}
+}
+
+func (a *providerActionAPI) applyOutlookFlagsLocked(owner string, payload map[string]json.RawMessage) {
+	// Decode through a temporary because map elements cannot be addressed.
+	if raw, ok := payload["isRead"]; ok {
+		var read bool
+		_ = json.Unmarshal(raw, &read)
+		a.read[owner] = read
+	}
+	if raw, ok := payload["flag"]; ok {
+		var flag map[string]string
+		_ = json.Unmarshal(raw, &flag)
+		a.star[owner] = flag["flagStatus"] == "flagged"
+	}
+}
+
+// serveGraphBatch answers a Graph $batch as Graph does: one response per
+// request, each with its own status. A message the mailbox no longer has
+// answers 404 inside the batch.
+func (a *providerActionAPI) serveGraphBatch(w http.ResponseWriter, owner string, wire []byte, missing bool) {
+	var batch struct {
+		Requests []struct {
+			ID      string                     `json:"id"`
+			Method  string                     `json:"method"`
+			URL     string                     `json:"url"`
+			Headers map[string]string          `json:"headers"`
+			Body    map[string]json.RawMessage `json:"body"`
+		} `json:"requests"`
+	}
+	if err := json.Unmarshal(wire, &batch); err != nil || len(batch.Requests) == 0 || len(batch.Requests) > 20 {
+		http.Error(w, "invalid batch", 400)
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	responses := []map[string]any{}
+	for _, request := range batch.Requests {
+		a.batched[owner+"|"+request.Method+"|"+request.URL]++
+		status := 200
+		switch {
+		case !strings.Contains(request.Headers["Prefer"], `IdType="ImmutableId"`):
+			status = 400
+		case missing:
+			status = 404
+		case request.Method == "DELETE":
+			status = 204
+		default:
+			a.applyOutlookFlagsLocked(owner, request.Body)
+		}
+		responses = append(responses, map[string]any{"id": request.ID, "status": status, "body": map[string]any{}})
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{"responses": responses})
 }
 
 func (a *providerActionAPI) categoriesLocked(owner string) []string {
@@ -308,7 +362,7 @@ func (t providerActionTransport) RoundTrip(r *http.Request) (*http.Response, err
 }
 func newProviderActionFixture(t *testing.T, provider string) (*userStorageFixture, *providerActionAPI) {
 	t.Helper()
-	api := &providerActionAPI{provider: provider, calls: map[string]int{}, read: map[string]bool{}, star: map[string]bool{}, parent: map[string]string{"alice": "INBOX", "bob": "INBOX"}, entered: make(chan struct{}), release: make(chan struct{}), lookupCount: 1}
+	api := &providerActionAPI{provider: provider, calls: map[string]int{}, batched: map[string]int{}, read: map[string]bool{}, star: map[string]bool{}, parent: map[string]string{"alice": "INBOX", "bob": "INBOX"}, entered: make(chan struct{}), release: make(chan struct{}), lookupCount: 1}
 	api.labels = map[string]map[string]string{"alice": {"Existing": "Label_Existing"}, "bob": {"Existing": "Label_Existing"}}
 	api.appliedLabels = map[string]map[string]bool{"alice": {"Existing": true}, "bob": {"Existing": true}}
 	server := httptest.NewServer(api)
@@ -754,16 +808,18 @@ func TestUserProviderActionsReachEveryCopyInTheFolder(t *testing.T) {
 				}
 				waitUserIMAP(t, func() bool { return f.pendingMutations(t, "alice") == 0 })
 			}
+			// Read, starred and deleting for good go in batches, which name
+			// each copy.
 			want := map[string]int{"alice|PATCH|/me/messages/m2": 2, "alice|POST|/me/messages/m2/move": 2, "alice|DELETE|/me/messages/m2": 1}
 			if provider == "gmail" {
-				// Read, starred and the move to Junk are label changes.
-				want = map[string]int{"alice|POST|/users/me/messages/m2/modify": 3, "alice|POST|/users/me/messages/m2/trash": 1, "alice|DELETE|/users/me/messages/m2": 1}
+				// The move to Junk is a label change.
+				want = map[string]int{"alice|batchModify|m2": 2, "alice|POST|/users/me/messages/m2/modify": 1, "alice|POST|/users/me/messages/m2/trash": 1, "alice|batchDelete|m2": 1}
 			}
 			api.mu.Lock()
-			calls := fmt.Sprint(api.calls)
+			calls := fmt.Sprint(api.calls, api.batched)
 			reached := true
 			for call, count := range want {
-				reached = reached && api.calls[call] == count
+				reached = reached && api.calls[call]+api.batched[call] == count
 			}
 			api.mu.Unlock()
 			if !reached {

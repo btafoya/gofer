@@ -136,17 +136,26 @@ func (s *UserIMAP) applyMutationBatch(ctx context.Context, scope *userIMAPScope,
 			applied = append(applied, i)
 		}
 	}
-	if err := scope.call(ctx, func(db *storage.DB) error {
+	if lead.ProviderType == storage.MessageMutationProviderGmail || lead.ProviderType == storage.MessageMutationProviderOutlook {
+		// As applyProviderMutation records each, checking the attempt. A
+		// message whose identity changed meanwhile fails alone, as it does
+		// there; the others are still recorded.
 		for _, i := range applied {
 			m, info := grouped[i], groupedInfos[i]
+			err := scope.call(ctx, func(db *storage.DB) error {
+				return db.CompleteProviderMutation(ctx, m, scope.config.ProviderAccountID, info.RemoteMessageID, info.InternetMessageID, info.RemoteMessageID, "", gone[i])
+			})
+			if err != nil && !errors.Is(err, storage.ErrMessageMutationSuperseded) {
+				failed = append(failed, mutationFailure{m, err})
+			}
+		}
+		return failed, nil
+	}
+	if err := scope.call(ctx, func(db *storage.DB) error {
+		for _, i := range applied {
+			m := grouped[i]
 			var err error
 			switch {
-			case m.ProviderType == storage.MessageMutationProviderGmail || m.ProviderType == storage.MessageMutationProviderOutlook:
-				// As applyProviderMutation records it, checking the attempt.
-				err = db.CompleteProviderMutation(ctx, m, scope.config.ProviderAccountID, info.RemoteMessageID, info.InternetMessageID, info.RemoteMessageID, "", gone[i])
-				if errors.Is(err, storage.ErrMessageMutationSuperseded) {
-					err = nil
-				}
 			case deleting:
 				// As applyMutation records a delete, confirming one already gone.
 				err = db.CompleteMessageDeleteMutation(ctx, m.ID)
