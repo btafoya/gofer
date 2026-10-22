@@ -208,6 +208,7 @@ func (h *Handler) RegisterUserStorageRoutes(ctx context.Context, mux *http.Serve
 	private("GET /api/calendar/guest-suggestions", routed.handleCalendarGuestSuggestions)
 	private("GET /contacts", routed.handleContacts)
 	private("GET /contacts/items", routed.handleContactItems)
+	private("GET /contacts/trash-count", routed.handleContactTrashCount)
 	private("GET /{$}", routed.handleIndex)
 	private("GET /folder/{id}", routed.handleFolderPartial)
 	private("GET /folder/{id}/full", routed.handleFolderFull)

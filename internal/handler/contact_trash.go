@@ -13,6 +13,7 @@ import (
 	"github.com/cristianadrielbraun/gofer/internal/config"
 	"github.com/cristianadrielbraun/gofer/internal/models"
 	"github.com/cristianadrielbraun/gofer/internal/storage"
+	"github.com/cristianadrielbraun/gofer/internal/views"
 )
 
 // Deleting a contact moves it to the Trash, in Gofer only. It is deleted for
@@ -129,6 +130,23 @@ func (h *Handler) handleDeleteContactForever(w http.ResponseWriter, r *http.Requ
 	default:
 		userContactEditError(w, r, err)
 	}
+}
+
+// handleContactTrashCount gives the count the sidebar's Trash shows.
+func (h *Handler) handleContactTrashCount(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := h.userID(ctx)
+	var count int
+	if err := h.withUserDB(ctx, userID, func(db *storage.DB) error {
+		var err error
+		count, err = db.CountContacts(ctx, userID, models.ContactFilters{Trash: true})
+		return err
+	}); err != nil {
+		http.Error(w, "contacts unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Cache-Control", "private, no-store")
+	views.ContactsTrashCount(count).Render(ctx, w)
 }
 
 // handleTrashContacts moves the posted contacts to the Trash. Ids that

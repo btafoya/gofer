@@ -107,8 +107,10 @@ type Contact struct {
 	Source                string
 	IsManual              bool
 	IsDeleted             bool
-	// TrashedAt is when the contact went to the Trash, formatted for showing.
+	// TrashedAt is when the contact went to the Trash, and TrashPurgeAt when
+	// it is deleted for good from there, formatted for showing.
 	TrashedAt        string
+	TrashPurgeAt     string
 	MessageCount     int
 	CreatedAt        string
 	LastSeenAt       string
@@ -203,6 +205,10 @@ type ContactAddressBook struct {
 	Default       bool   `json:"default,omitempty"`
 	LastSyncToken string `json:"-"`
 }
+
+// ContactTrashRetentionDays is how long a contact stays in the Trash before
+// it is deleted for good.
+const ContactTrashRetentionDays = 30
 
 type ContactFilters struct {
 	// Trash lists the contacts in the Trash instead of the others.

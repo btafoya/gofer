@@ -2683,6 +2683,7 @@ class VirtualContactsList {
       source: this.container.dataset.source || "",
       saveTarget: this.container.dataset.saveTarget || "",
       activity: this.container.dataset.activity || "",
+      trash: this.container.dataset.trash === "1",
       sortBy: this.container.dataset.sortBy || "updated",
       sortOrder: this.container.dataset.sortOrder || "desc",
     }
@@ -3067,6 +3068,7 @@ class VirtualContactsList {
     if (filters.source) params.set("source", filters.source)
     if (filters.saveTarget) params.set("save_target", filters.saveTarget)
     if (filters.activity) params.set("activity", filters.activity)
+    if (filters.trash) params.set("trash", "1")
     params.set("sort_by", filters.sortBy || "updated")
     params.set("sort_order", filters.sortOrder || "desc")
     return "/contacts/items?" + params.toString()
@@ -3216,6 +3218,7 @@ class VirtualContactsList {
       source: (filters.source || "").trim(),
       saveTarget: (filters.saveTarget || "").trim(),
       activity: (filters.activity || "").trim(),
+      trash: !!filters.trash,
       sortBy: (filters.sortBy || "updated").trim(),
       sortOrder: (filters.sortOrder || "desc").trim(),
     }
@@ -3258,6 +3261,7 @@ class VirtualContactsList {
     if (this.filters.source) params.set("source", this.filters.source)
     if (this.filters.saveTarget) params.set("save_target", this.filters.saveTarget)
     if (this.filters.activity) params.set("activity", this.filters.activity)
+    if (this.filters.trash) params.set("trash", "1")
     params.set("sort_by", this.filters.sortBy || "updated")
     params.set("sort_order", this.filters.sortOrder || "desc")
     if (this.viewMode !== "cards") params.set("view", this.viewMode)

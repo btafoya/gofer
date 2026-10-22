@@ -193,7 +193,9 @@ document.addEventListener("DOMContentLoaded", function () {
       var search = document.querySelector("[data-contact-search-input]")
       var form = document.querySelector("[data-contact-filter-form]")
       var sortForm = document.querySelector("[data-contact-sort-form]")
+      var scroll = document.getElementById("contacts-list-scroll")
       return {
+        trash: !!(scroll && scroll.dataset.trash === "1"),
         query: search ? search.value || "" : "",
         source: form && form.querySelector('[name="source"]') ? form.querySelector('[name="source"]').value || "" : "",
         saveTarget: form && form.querySelector('[name="save_target"]') ? form.querySelector('[name="save_target"]').value || "" : "",
@@ -217,6 +219,7 @@ document.addEventListener("DOMContentLoaded", function () {
       try {
         // Mirrors contactSidebarActiveTarget in sidebar.templ.
         var params = new URL(url || window.location.href, window.location.origin).searchParams
+        if (params.get("trash") === "1") return "trash"
         var saveTarget = params.get("save_target") || ""
         var source = params.get("source") || ""
         if (!source) return saveTarget
@@ -265,7 +268,7 @@ document.addEventListener("DOMContentLoaded", function () {
       if (!list) return
       var filters = readFilters()
       syncFilterUI(filters)
-      setContactsSidebarActive(filters.saveTarget)
+      setContactsSidebarActive(filters.trash ? "trash" : filters.saveTarget)
       list.applyFilters(filters).catch(function () {})
     }
 
@@ -2164,7 +2167,7 @@ document.addEventListener("DOMContentLoaded", function () {
     function contactSelectAllKey(list) {
       if (!list) return ""
       var filters = list.filters || {}
-      return JSON.stringify([filters.query || "", filters.source || "", filters.saveTarget || "", filters.activity || "", filters.sortBy || "", filters.sortOrder || ""])
+      return JSON.stringify([!!filters.trash, filters.query || "", filters.source || "", filters.saveTarget || "", filters.activity || "", filters.sortBy || "", filters.sortOrder || ""])
     }
 
     function setContactSelected(info, selected) {
@@ -2373,31 +2376,116 @@ document.addEventListener("DOMContentLoaded", function () {
       form.remove()
     }
 
+    // Reloads the list after contacts went to the Trash or left it: the
+    // ones that went drop out, with their page if it was open, and the
+    // sidebar's Trash count follows.
+    function refreshContactsAfterTrashChange() {
+      var list = contactsListController()
+      if (list && typeof list.applyFilters === "function") {
+        list.applyFilters(list.filters).then(function () {
+          var empty = document.querySelector("[data-contacts-empty-trash]")
+          if (empty) empty.disabled = !list.totalCount
+        }).catch(function () {})
+      }
+      if (typeof htmx !== "undefined") htmx.trigger(document.body, "contacts-trash-changed")
+    }
+
+    function contactCountLabel(count) {
+      return formatMailCount(count) + (count === 1 ? " contact" : " contacts")
+    }
+
+    function postContactIDs(url, ids) {
+      var body = new URLSearchParams()
+      ids.forEach(function (id) { body.append("id", id) })
+      return fetch(url, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" }, body: body.toString() })
+        .then(function (response) {
+          if (!response.ok) return response.text().then(function (text) { throw new Error(text.trim() || "Request failed") })
+          return response.json()
+        })
+    }
+
+    // Moves contacts to the Trash, in Gofer only, without asking: the toast
+    // offers to undo it. who names a single contact.
+    function moveContactsToTrash(ids, who) {
+      if (!ids.length || contactDeleteBusy) return
+      contactDeleteBusy = true
+      syncContactSelection()
+      postContactIDs("/api/contacts/bulk-delete", ids)
+        .then(function (result) {
+          var moved = (result && result.trashed) || 0
+          clearContactSelection()
+          refreshContactsAfterTrashChange()
+          showGoferToast({
+            id: "contacts-trashed",
+            title: moved === 1 && who ? "Moved to Trash" : contactCountLabel(moved) + " moved to Trash",
+            description: moved === 1 && who ? who : "",
+            variant: "success",
+            icon: "success",
+            position: "bottom-right",
+            duration: 8000,
+            dismissible: true,
+            secondaryActionLabel: "Undo",
+            onSecondaryAction: function () {
+              dismissGoferToast(document.getElementById("contacts-trashed"))
+              restoreContacts(ids, who)
+            },
+          })
+        })
+        .catch(function (err) {
+          showGoferToast({ id: "contacts-trashed", title: "Couldn't move to Trash", description: err.message, variant: "error", icon: "error", position: "bottom-right", duration: 8000, dismissible: true })
+        })
+        .finally(function () {
+          contactDeleteBusy = false
+          syncContactSelection()
+        })
+    }
+
+    function restoreContacts(ids, who) {
+      if (!ids.length || contactDeleteBusy) return
+      contactDeleteBusy = true
+      syncContactSelection()
+      postContactIDs("/api/contacts/trash/restore", ids)
+        .then(function (result) {
+          var restored = (result && result.restored) || 0
+          clearContactSelection()
+          refreshContactsAfterTrashChange()
+          showGoferToast({ id: "contacts-restored", title: restored === 1 && who ? "Restored" : contactCountLabel(restored) + " restored", description: restored === 1 && who ? who : "", variant: "success", icon: "success", position: "bottom-right", duration: 4000, dismissible: true })
+        })
+        .catch(function (err) {
+          showGoferToast({ id: "contacts-restored", title: "Couldn't restore", description: err.message, variant: "error", icon: "error", position: "bottom-right", duration: 8000, dismissible: true })
+        })
+        .finally(function () {
+          contactDeleteBusy = false
+          syncContactSelection()
+        })
+    }
+
     // contactBulkDeleteLimit in contact_selection.go: one request's share.
     var CONTACT_DELETE_BATCH = 100
 
-    // Deletes the selected contacts after asking, as deleting each alone
-    // would: synced ones leave their address books too. The server takes
-    // them a batch at a time; the toast says how far it got and what failed.
-    function deleteSelectedContacts() {
-      var ids = Array.from(selectedContactIds)
-      if (!ids.length || contactDeleteBusy) return
+    // Deletes contacts in the Trash for good after asking: synced ones leave
+    // their address books too. contacts maps each id to what is known of it:
+    // its name and whether it syncs. The server takes them a batch at a
+    // time; the toast says how far it got and what failed.
+    function deleteContactsForever(ids, contacts, title) {
+      if (!ids.length || contactDeleteBusy) return Promise.resolve()
       var synced = 0
       var unknown = 0
       ids.forEach(function (id) {
-        var info = selectedContactInfo.get(id) || {}
+        var info = contacts.get(id) || {}
         if (info.synced === true) synced++
         else if (info.synced !== false) unknown++
       })
-      var count = formatMailCount(ids.length) + (ids.length === 1 ? " contact" : " contacts")
+      var single = ids.length === 1 ? (contacts.get(ids[0]) || {}) : null
+      var who = single ? single.name || single.email || "This contact" : contactCountLabel(ids.length)
       var note = synced
-        ? " " + formatMailCount(synced) + (synced === 1 ? " of them is" : " of them are") + " also removed from the address books " + (synced === 1 ? "it syncs" : "they sync") + " with."
+        ? (ids.length === 1 ? " It is also removed from the address books it syncs with." : " " + formatMailCount(synced) + (synced === 1 ? " of them is" : " of them are") + " also removed from the address books " + (synced === 1 ? "it syncs" : "they sync") + " with.")
         : unknown ? " Any synced with an address book are also removed there." : ""
-      window.goferConfirm({
-        title: ids.length === 1 ? "Delete this contact?" : "Delete " + count + "?",
-        message: count + " will be deleted." + note,
+      return window.goferConfirm({
+        title: title || (ids.length === 1 ? "Delete this contact forever?" : "Delete " + contactCountLabel(ids.length) + " forever?"),
+        message: who + " will be deleted and can't be restored." + note,
         destructive: true,
-        confirmLabel: "Delete",
+        confirmLabel: "Delete forever",
       }).then(function (accepted) {
         if (!accepted) return
         contactDeleteBusy = true
@@ -2414,44 +2502,60 @@ document.addEventListener("DOMContentLoaded", function () {
         var run = Promise.resolve()
         batches.forEach(function (batch) {
           run = run.then(function () {
-            var body = new URLSearchParams()
-            batch.forEach(function (id) { body.append("id", id) })
-            return fetch("/api/contacts/bulk-delete", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" }, body: body.toString() })
-              .then(function (response) {
-                if (!response.ok) return response.text().then(function (text) { throw new Error(text.trim() || "Delete failed") })
-                return response.json()
-              })
-              .then(function (result) {
-                deleted += (result && result.trashed) || 0
-                ;((result && result.failed) || []).forEach(function (failure) { failed.push(failure) })
-                progress()
-              })
+            return postContactIDs("/api/contacts/trash/delete", batch).then(function (result) {
+              deleted += (result && result.deleted) || 0
+              ;((result && result.failed) || []).forEach(function (failure) { failed.push(failure) })
+              progress()
+            })
           })
         })
         return run
           .catch(function (err) {
-            // The rest of the selection wasn't sent; say so with what did go.
+            // The rest wasn't sent; say so with what did go.
             failed.push({ id: "", error: err.message })
           })
           .then(function () {
             dismissGoferToast(document.getElementById("contacts-deleting"))
-            // Named before the selection, which knows the names, is cleared.
             var first = failed[0]
-            var who = first && first.id && selectedContactInfo.get(first.id) ? selectedContactInfo.get(first.id).name : ""
-            var list = contactsListController()
-            if (list && typeof list.applyFilters === "function") list.applyFilters(list.filters).catch(function () {})
+            var name = first && first.id && contacts.get(first.id) ? contacts.get(first.id).name : ""
             clearContactSelection()
+            refreshContactsAfterTrashChange()
             if (!failed.length) {
-              showGoferToast({ id: "contacts-deleted", title: formatMailCount(deleted) + (deleted === 1 ? " contact deleted" : " contacts deleted"), variant: "success", icon: "success", position: "bottom-right", duration: 4000, dismissible: true })
+              showGoferToast({ id: "contacts-deleted", title: contactCountLabel(deleted) + " deleted forever", variant: "success", icon: "success", position: "bottom-right", duration: 4000, dismissible: true })
               return
             }
-            showGoferToast({ id: "contacts-deleted", title: formatMailCount(deleted) + " deleted, " + formatMailCount(failed.length) + " not", description: (who ? who + ": " : "") + first.error, variant: deleted ? "warning" : "error", icon: deleted ? "warning" : "error", position: "bottom-right", duration: 10000, dismissible: true })
+            showGoferToast({ id: "contacts-deleted", title: formatMailCount(deleted) + " deleted, " + formatMailCount(failed.length) + " not", description: (name ? name + ": " : "") + first.error, variant: deleted ? "warning" : "error", icon: deleted ? "warning" : "error", position: "bottom-right", duration: 10000, dismissible: true })
           })
           .finally(function () {
             contactDeleteBusy = false
             syncContactSelection()
           })
       })
+    }
+
+    // Deletes everything in the Trash for good, after asking.
+    function emptyContactTrash() {
+      if (contactDeleteBusy) return
+      fetch("/api/contacts/ids?trash=1", { headers: { Accept: "application/json" } })
+        .then(function (response) {
+          if (!response.ok) throw new Error("The Trash couldn't be read.")
+          return response.json()
+        })
+        .then(function (data) {
+          var contacts = new Map()
+          var ids = ((data && data.contacts) || []).map(function (contact) {
+            contacts.set(contact.id, contact)
+            return contact.id
+          })
+          if (!ids.length) {
+            refreshContactsAfterTrashChange()
+            return
+          }
+          return deleteContactsForever(ids, contacts, "Empty the Trash?")
+        })
+        .catch(function (err) {
+          showGoferToast({ id: "contacts-deleted", title: "Couldn't empty the Trash", description: err.message, variant: "error", icon: "error", position: "bottom-right", duration: 8000, dismissible: true })
+        })
     }
 
     function setupContactsSelection() {
@@ -2524,7 +2628,26 @@ document.addEventListener("DOMContentLoaded", function () {
           var name = action.getAttribute("data-contact-selection-action")
           if (name === "compose") composeToSelectedContacts()
           else if (name === "export") exportSelectedContacts(Array.from(selectedContactIds))
-          else if (name === "delete") deleteSelectedContacts()
+          else if (name === "delete") moveContactsToTrash(Array.from(selectedContactIds))
+          else if (name === "restore") restoreContacts(Array.from(selectedContactIds))
+          else if (name === "delete-forever") deleteContactsForever(Array.from(selectedContactIds), selectedContactInfo)
+          return
+        }
+        var emptyTrash = e.target.closest("[data-contacts-empty-trash]")
+        if (emptyTrash && !emptyTrash.disabled) {
+          emptyContactTrash()
+          return
+        }
+        // The contact page's own buttons, for a contact in the Trash.
+        var restore = e.target.closest("[data-contact-restore]")
+        if (restore) {
+          restoreContacts([restore.getAttribute("data-contact-restore")], restore.getAttribute("data-contact-name") || "")
+          return
+        }
+        var forever = e.target.closest("[data-contact-delete-forever]")
+        if (forever) {
+          var id = forever.getAttribute("data-contact-delete-forever")
+          deleteContactsForever([id], new Map([[id, { id: id, name: forever.getAttribute("data-contact-name") || "", email: forever.getAttribute("data-contact-email") || "", synced: forever.getAttribute("data-contact-synced") === "true" }]]))
         }
       })
 
@@ -2601,17 +2724,12 @@ document.addEventListener("DOMContentLoaded", function () {
         close()
       }, true)
 
-      // The contact page's Delete asks first too, then deletes as the menu does.
+      // The contact page's Delete moves it to the Trash, as the menu does.
       document.addEventListener("submit", function (e) {
         var form = e.target.closest && e.target.closest("form[data-contact-delete-form]")
         if (!form) return
         e.preventDefault()
-        deleteContactFromMenu({
-          id: form.dataset.contactDeleteForm,
-          name: form.dataset.contactDeleteName || "",
-          email: form.dataset.contactDeleteEmail || "",
-          synced: form.dataset.contactDeleteSynced === "true",
-        })
+        moveContactsToTrash([form.dataset.contactDeleteForm], form.dataset.contactDeleteName || form.dataset.contactDeleteEmail || "")
       })
 
       document.addEventListener("click", function (e) {
@@ -2631,7 +2749,11 @@ document.addEventListener("DOMContentLoaded", function () {
       } else if (target.multiple && action === "export") {
         exportSelectedContacts(Array.from(selectedContactIds))
       } else if (target.multiple && action === "delete") {
-        deleteSelectedContacts()
+        moveContactsToTrash(Array.from(selectedContactIds))
+      } else if (target.multiple && action === "restore") {
+        restoreContacts(Array.from(selectedContactIds))
+      } else if (target.multiple && action === "delete-forever") {
+        deleteContactsForever(Array.from(selectedContactIds), selectedContactInfo)
       } else if (action === "compose" && target.email) {
         // The same compose a mailto: link opens.
         var values = parseMailtoIntent("mailto:" + encodeURIComponent(target.email))
@@ -2646,7 +2768,11 @@ document.addEventListener("DOMContentLoaded", function () {
       } else if (action === "export") {
         window.location.href = "/api/contacts/" + encodeURIComponent(target.id) + "/export"
       } else if (action === "delete") {
-        deleteContactFromMenu(target)
+        moveContactsToTrash([target.id], target.name || target.email)
+      } else if (action === "restore") {
+        restoreContacts([target.id], target.name || target.email)
+      } else if (action === "delete-forever") {
+        deleteContactsForever([target.id], new Map([[target.id, target]]))
       }
     }
 
@@ -2680,33 +2806,6 @@ document.addEventListener("DOMContentLoaded", function () {
       var giveUp = setTimeout(function () { document.body.removeEventListener("htmx:afterSettle", settled) }, 15000)
       document.body.addEventListener("htmx:afterSettle", settled)
       link.click()
-    }
-
-    function deleteContactFromMenu(target) {
-      var who = target.name || target.email || "This contact"
-      window.goferConfirm({
-        title: "Delete contact?",
-        message: who + " will be deleted." + (target.synced ? " It is also removed from the address books it syncs with." : ""),
-        destructive: true,
-        confirmLabel: "Delete",
-      }).then(function (accepted) {
-        if (!accepted) return
-        return fetch("/api/contacts/" + encodeURIComponent(target.id) + "/delete", { method: "POST" })
-          .then(function (response) {
-            if (response.ok) return
-            return response.text().then(function (text) { throw new Error(text.trim() || "Delete failed") })
-          })
-          .then(function () {
-            var scroll = document.getElementById("contacts-list-scroll")
-            var list = scroll && scroll._virtualContactsList
-            // Reloading the list drops the contact, and its page if it was open.
-            if (list && typeof list.applyFilters === "function") list.applyFilters(list.filters).catch(function () {})
-            showGoferToast({ id: "contact-deleted", title: "Contact deleted", description: who, variant: "success", icon: "success", position: "bottom-right", duration: 3000, dismissible: true })
-          })
-          .catch(function (err) {
-            showGoferToast({ id: "contact-delete-error", title: "Couldn't delete the contact", description: err.message, variant: "error", icon: "error", position: "bottom-right", duration: 8000, dismissible: true })
-          })
-      })
     }
 
     // What a right-click in the mail sidebar landed on: a folder (not a tag

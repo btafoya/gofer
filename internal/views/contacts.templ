@@ -792,6 +792,9 @@ func contactCardOrigin(contact models.Contact, accounts []models.Account) contac
 // contactCardDate is the date a contact card shows: when the contact was last
 // seen in mail, or else when it was added, with what it means.
 func contactCardDate(contact models.Contact) (string, string) {
+	if trashed := strings.TrimSpace(contact.TrashedAt); trashed != "" {
+		return trashed, "Moved to Trash " + trashed + "; deleted for good " + contact.TrashPurgeAt
+	}
 	if seen := strings.TrimSpace(contact.LastSeenAt); seen != "" {
 		return seen, "Last seen " + seen
 	}
@@ -828,6 +831,9 @@ func contactFilterCount(filters models.ContactFilters) int {
 
 func contactFilterValues(filters models.ContactFilters) url.Values {
 	values := url.Values{}
+	if filters.Trash {
+		values.Set("trash", "1")
+	}
 	if strings.TrimSpace(filters.Query) != "" {
 		values.Set("q", strings.TrimSpace(filters.Query))
 	}
@@ -1317,15 +1323,41 @@ templ ContactsListPane(contacts []models.Contact, selected *models.Contact, filt
 		<div class="contacts-list-header px-4 py-4 space-y-3">
 			<div class="contacts-list-title-row flex items-center justify-between">
 				<div class="flex items-center gap-2">
-					<h2 class="text-lg font-bold tracking-tight" style="font-family: var(--font-serif)" data-contacts-title>Contacts</h2>
+					<h2 class="text-lg font-bold tracking-tight" style="font-family: var(--font-serif)" data-contacts-title>
+						if filters.Trash {
+							Trash
+						} else {
+							Contacts
+						}
+					</h2>
 					<span id="contacts-count" class="inline-flex h-5 min-w-10 items-center justify-center rounded-md bg-muted px-2 text-xs font-medium text-muted-foreground shadow-[0_1px_2px_rgba(0,0,0,0.06)]">{ fmt.Sprintf("%d", totalCount) }</span>
 				</div>
+				if filters.Trash {
+					@button.Button(button.Props{
+						Variant:    button.VariantOutline,
+						Size:       button.SizeSm,
+						Class:      "h-7 gap-1.5 px-2.5 text-xs " + menuDestructiveClass,
+						Disabled:   totalCount == 0,
+						Attributes: templ.Attributes{"data-contacts-empty-trash": ""},
+					}) {
+						@icon.Trash2(icon.Props{Class: "size-3.5"})
+						Empty Trash
+					}
+				}
 			</div>
+			if filters.Trash {
+				<p class="px-1 text-xs text-muted-foreground" data-contacts-trash-note>
+					Contacts here are deleted for good after { fmt.Sprint(models.ContactTrashRetentionDays) } days, from their address books too.
+				</p>
+			}
 			<div class="contacts-search-row flex items-center gap-2">
 				<button type="button" class="mail-list-search-close hidden" data-mail-search-close aria-label="Close search">
 					@icon.ArrowLeft(icon.Props{Class: "size-5"})
 				</button>
 				<form action="/contacts" method="get" class="relative groove rounded-lg flex-1 min-w-0" data-contact-search-form>
+					if filters.Trash {
+						<input type="hidden" name="trash" value="1"/>
+					}
 					<input type="hidden" name="source" value={ filters.Source }/>
 					<input type="hidden" name="save_target" value={ filters.SaveTarget }/>
 					<input type="hidden" name="activity" value={ filters.Activity }/>
@@ -1356,13 +1388,16 @@ templ ContactsListPane(contacts []models.Contact, selected *models.Contact, filt
 						}
 						@dropdown.Content(dropdown.ContentProps{Placement: dropdown.PlacementBottomEnd, Class: "mobile-sheet w-[26rem] max-w-[calc(100vw-2rem)] normal-case tracking-normal p-3"}) {
 							<form action="/contacts" method="get" class="space-y-3" data-contact-filter-form>
+								if filters.Trash {
+									<input type="hidden" name="trash" value="1"/>
+								}
 								<input type="hidden" name="q" value={ filters.Query }/>
 								<input type="hidden" name="view" value={ contactViewMode(filters.View) }/>
 								<input type="hidden" name="sort_by" value={ filters.SortBy }/>
 								<input type="hidden" name="sort_order" value={ filters.SortOrder }/>
 								<div class="flex items-center justify-between gap-2">
 									<div class="text-xs font-semibold text-muted-foreground">Quick filters</div>
-									<a href={ contactsURL(models.ContactFilters{Query: filters.Query, View: filters.View, SortBy: filters.SortBy, SortOrder: filters.SortOrder}, "") } class="text-[11px] font-medium text-muted-foreground hover:text-foreground" data-contact-filter-clear>Clear</a>
+									<a href={ contactsURL(models.ContactFilters{Trash: filters.Trash, Query: filters.Query, View: filters.View, SortBy: filters.SortBy, SortOrder: filters.SortOrder}, "") } class="text-[11px] font-medium text-muted-foreground hover:text-foreground" data-contact-filter-clear>Clear</a>
 								</div>
 								<div class="space-y-1 text-[11px] font-medium text-muted-foreground">
 									<span>Origin</span>
@@ -1540,7 +1575,7 @@ templ ContactsListPane(contacts []models.Contact, selected *models.Contact, filt
 				}
 			}
 			<div class="flex-1"></div>
-			@ContactsSelectionActions()
+			@ContactsSelectionActions(filters.Trash)
 		</div>
 		@ContactsSelectAllBanner()
 		<hr class="divider-etched"/>
@@ -1559,8 +1594,19 @@ templ ContactsListPane(contacts []models.Contact, selected *models.Contact, filt
 			data-source={ filters.Source }
 			data-save-target={ filters.SaveTarget }
 			data-activity={ filters.Activity }
+			if filters.Trash {
+				data-trash="1"
+			}
 		>
-			if len(contacts) == 0 {
+			if len(contacts) == 0 && filters.Trash {
+				<div class="flex flex-col items-center justify-center py-20 px-4 text-center">
+					<div class="empty-icon-box size-16 rounded-2xl bg-muted/50 flex items-center justify-center mb-4 raised">
+						@icon.Trash2(icon.Props{Class: "size-5"})
+					</div>
+					<h3 class="font-semibold text-sm mb-1">The Trash is empty</h3>
+					<p class="text-xs text-muted-foreground">Deleted contacts stay here for { fmt.Sprint(models.ContactTrashRetentionDays) } days, to restore if you change your mind.</p>
+				</div>
+			} else if len(contacts) == 0 {
 				<div class="flex flex-col items-center justify-center py-20 px-4 text-center">
 					<div class="empty-icon-box size-16 rounded-2xl bg-muted/50 flex items-center justify-center mb-4 raised">
 						@icon.BookUser(icon.Props{Class: "size-5"})
@@ -1582,7 +1628,7 @@ templ ContactsListPane(contacts []models.Contact, selected *models.Contact, filt
 		<a href="/contacts?new=1" hx-get="/contacts?new=1" hx-target="#main-content" hx-swap="outerHTML" hx-push-url="/contacts?new=1" class="mobile-compose-fab" aria-label="New contact">
 			@icon.UserPlus(icon.Props{Class: "size-5"})
 		</a>
-		@ContactsContextMenu()
+		@ContactsContextMenu(filters.Trash)
 	</section>
 }
 
@@ -1624,8 +1670,18 @@ templ ContactsSelectAllControl() {
 
 // ContactsSelectionActions act on the selected contacts. They show only
 // while contacts are selected, fading in at the toolbar's right as the mail
-// list's message actions do.
-templ ContactsSelectionActions() {
+// list's message actions do. In the Trash they restore or delete for good.
+templ ContactsSelectionActions(trash bool) {
+	if trash {
+		<div class="items-center gap-1" data-contact-selection-actions>
+			@contactSelectionAction("restore", "Restore", "Restore the selected contacts", "") {
+				@icon.Undo2(icon.Props{Class: "size-3.5"})
+			}
+			@contactSelectionAction("delete-forever", "Delete forever", "Delete the selected contacts forever", "hover:bg-destructive/10 hover:text-destructive") {
+				@icon.Trash2(icon.Props{Class: "size-3.5"})
+			}
+		</div>
+	} else {
 	<div class="items-center gap-1" data-contact-selection-actions>
 		@contactSelectionAction("compose", "New message", "Write to the selected contacts", "") {
 			@icon.Pen(icon.Props{Class: "size-3.5"})
@@ -1633,10 +1689,11 @@ templ ContactsSelectionActions() {
 		@contactSelectionAction("export", "Export vCards", "Export the selected contacts", "") {
 			@icon.Download(icon.Props{Class: "size-3.5"})
 		}
-		@contactSelectionAction("delete", "Delete", "Delete the selected contacts", "hover:bg-destructive/10 hover:text-destructive") {
+		@contactSelectionAction("delete", "Move to Trash", "Move the selected contacts to the Trash", "hover:bg-destructive/10 hover:text-destructive") {
 			@icon.Trash2(icon.Props{Class: "size-3.5"})
 		}
 	</div>
+	}
 }
 
 templ contactSelectionAction(action, tip, label, class string) {
@@ -1683,8 +1740,9 @@ templ ContactsSelectAllBanner() {
 
 // ContactsContextMenu opens where a contact in the list is right-clicked,
 // with what can be done to it. app.js places it and shows the items that
-// apply: the email ones only for a contact with an address.
-templ ContactsContextMenu() {
+// apply: the email ones only for a contact with an address. In the Trash it
+// restores or deletes for good.
+templ ContactsContextMenu(trash bool) {
 	@popover.Root(popover.RootProps{ID: "contacts-context-menu", Attributes: templ.Attributes{"data-contacts-context-menu": ""}}) {
 		@popover.Trigger() {
 			<span class="pointer-events-none fixed left-0 top-0 size-px" aria-hidden="true" data-point-popover-anchor></span>
@@ -1696,6 +1754,15 @@ templ ContactsContextMenu() {
 			Attributes: templ.Attributes{"role": "menu", "aria-label": "Contact actions"},
 		}) {
 			@dropdown.Label(dropdown.LabelProps{Class: "truncate text-xs font-medium text-muted-foreground", Attributes: templ.Attributes{"data-contacts-context-title": ""}})
+			if trash {
+				@contactsContextItem("restore", "Restore", "") {
+					@icon.Undo2(icon.Props{Class: "size-4"})
+				}
+				@dropdown.Separator()
+				@contactsContextItem("delete-forever", "Delete forever…", "text-destructive "+menuDestructiveClass) {
+					@icon.Trash2(icon.Props{Class: "size-4"})
+				}
+			} else {
 			<div data-contacts-context-group="email">
 				@contactsContextItem("compose", "New message", "") {
 					@icon.Pen(icon.Props{Class: "size-4"})
@@ -1716,10 +1783,11 @@ templ ContactsContextMenu() {
 			}
 			<div data-contacts-context-group="delete">
 				@dropdown.Separator()
-				@contactsContextItem("delete", "Delete…", "text-destructive "+menuDestructiveClass) {
+				@contactsContextItem("delete", "Move to Trash", "text-destructive "+menuDestructiveClass) {
 					@icon.Trash2(icon.Props{Class: "size-4"})
 				}
 			</div>
+			}
 		}
 	}
 }
@@ -1969,7 +2037,9 @@ templ ContactEditor(contact *models.Contact, profile *models.ContactProfile, syn
 			<div class="flex-1 overflow-y-auto">
 				@ContactReadOnlyView(*contact, profile, syncQueued, accounts)
 			</div>
-			@ContactEditDialog(*contact, profile, accounts)
+			if contact.TrashedAt == "" {
+				@ContactEditDialog(*contact, profile, accounts)
+			}
 		} else {
 			<div class="flex-1 overflow-y-auto">
 				<form id="contact-editor-form" action={ contactFormAction(contact) } method="post" class="flex min-h-full flex-col" data-contact-editor-form>
@@ -1981,7 +2051,7 @@ templ ContactEditor(contact *models.Contact, profile *models.ContactProfile, syn
 				</form>
 			</div>
 		}
-		if contact != nil {
+		if contact != nil && contact.TrashedAt == "" {
 			<form id={ "delete-contact-" + contact.ID } action={ fmt.Sprintf("/api/contacts/%s/delete", contact.ID) } method="post" data-contact-delete-form={ contact.ID } data-contact-delete-name={ contact.Name } data-contact-delete-email={ strings.TrimSpace(contact.Email) } data-contact-delete-synced={ fmt.Sprintf("%t", len(contact.SourceBooks) > 0) }></form>
 		}
 	</div>
@@ -1989,6 +2059,14 @@ templ ContactEditor(contact *models.Contact, profile *models.ContactProfile, syn
 
 templ ContactReadOnlyView(contact models.Contact, profile *models.ContactProfile, syncQueued bool, accounts []models.Account) {
 	<div class="contact-readonly w-full space-y-5 px-5 py-5 sm:px-7">
+		if contact.TrashedAt != "" {
+			<div class={ "flex items-start gap-2.5 rounded-md border px-3 py-2.5 text-sm " + contactInsightSeverityClass("warning") } data-contact-trash-notice>
+				@icon.Trash2(icon.Props{Class: "mt-0.5 size-4 shrink-0"})
+				<p>
+					This contact was moved to the Trash on { contact.TrashedAt }. It's deleted for good on { contact.TrashPurgeAt }, from its address books too. Restore it to edit it.
+				</p>
+			</div>
+		}
 		@ContactReadOnlyContactInfo(contact)
 		@ContactReadOnlySyncInfo(contact, profile, syncQueued, accounts)
 		@ContactReadOnlyActivityInfo(contact)
@@ -2028,7 +2106,7 @@ templ ContactReadOnlySyncInfo(contact models.Contact, profile *models.ContactPro
 			@button.Button(button.Props{
 				Variant: button.VariantOutline,
 				Size: button.SizeSm,
-				Disabled: !contactProfileSyncEnabled(profile) || contactSyncOperationActive(contact, syncQueued),
+				Disabled: contact.TrashedAt != "" || !contactProfileSyncEnabled(profile) || contactSyncOperationActive(contact, syncQueued),
 				Class: "h-7 gap-1.5 border-ink/10 bg-ink/[0.025] px-2.5 text-xs text-muted-foreground shadow-none",
 				Attributes: templ.Attributes{"data-contact-sync-now": "", "data-contact-id": contact.ID, "aria-label": "Sync this contact now"},
 			}) {
@@ -2293,7 +2371,12 @@ templ ContactEditorHeader(contact *models.Contact, profile *models.ContactProfil
 						</h1>
 					</div>
 					<div class="mt-1 text-sm text-muted-foreground">
-						if contact != nil {
+						if contact != nil && contact.TrashedAt != "" {
+							<span class="inline-flex items-center gap-1.5" data-contact-trash-status>
+								@icon.Trash2(icon.Props{Class: "size-3.5"})
+								In the Trash
+							</span>
+						} else if contact != nil {
 							Contact entry
 						} else {
 							Add a local contact for compose autocomplete.
@@ -2306,7 +2389,21 @@ templ ContactEditorHeader(contact *models.Contact, profile *models.ContactProfil
 					@icon.ArrowLeft(icon.Props{Class: "size-5"})
 				</button>
 				<div class="contact-header-spacer hidden"></div>
-				if contact != nil {
+				if contact != nil && contact.TrashedAt != "" {
+					<div class="flex shrink-0 items-center gap-2">
+					<button type="button" class="inline-flex h-9 items-center gap-1.5 rounded-md border border-ink/10 bg-ink/[0.025] px-3 text-sm font-semibold text-muted-foreground transition-colors hover:bg-ink/[0.06] hover:text-ink" data-contact-restore={ contact.ID } data-contact-name={ contact.Name }>
+						@icon.Undo2(icon.Props{Class: "size-3.5"})
+						Restore
+					</button>
+					<a href={ fmt.Sprintf("/api/contacts/%s/export", contact.ID) } class="size-9 rounded-md flex items-center justify-center text-muted-foreground hover:text-ink hover:bg-ink/5 transition-colors" aria-label="Export vCard">
+						@icon.Download(icon.Props{Class: "size-4"})
+					</a>
+					<button type="button" class="inline-flex h-9 items-center gap-1.5 rounded-md px-3 text-sm font-semibold text-muted-foreground transition-colors hover:text-destructive hover:bg-destructive/10" data-contact-delete-forever={ contact.ID } data-contact-name={ contact.Name } data-contact-email={ strings.TrimSpace(contact.Email) } data-contact-synced={ fmt.Sprintf("%t", len(contact.SourceBooks) > 0) }>
+						@icon.Trash2(icon.Props{Class: "size-4"})
+						Delete forever
+					</button>
+					</div>
+				} else if contact != nil {
 					{{ editDialogID := contactEditDialogID(*contact) }}
 					@dialog.Trigger(dialog.TriggerProps{For: editDialogID}) {
 						<button type="button" class="inline-flex h-9 items-center gap-1.5 rounded-md border border-ink/10 bg-ink/[0.025] px-3 text-sm font-semibold text-muted-foreground transition-colors hover:bg-ink/[0.06] hover:text-ink" aria-label="Edit contact" data-contact-edit-trigger data-contact-edit-dialog={ editDialogID }>
@@ -2322,7 +2419,7 @@ templ ContactEditorHeader(contact *models.Contact, profile *models.ContactProfil
 					<a href={ fmt.Sprintf("/api/contacts/%s/export", contact.ID) } class="size-9 rounded-md flex items-center justify-center text-muted-foreground hover:text-ink hover:bg-ink/5 transition-colors" aria-label="Export vCard">
 						@icon.Download(icon.Props{Class: "size-4"})
 					</a>
-					<button type="submit" form={ "delete-contact-" + contact.ID } class="size-9 rounded-md flex items-center justify-center text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors" aria-label="Delete contact">
+					<button type="submit" form={ "delete-contact-" + contact.ID } class="size-9 rounded-md flex items-center justify-center text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors" aria-label="Move to Trash">
 						@icon.Trash2(icon.Props{Class: "size-4"})
 					</button>
 				}

@@ -612,7 +612,7 @@ func scanProfileContactRow(scanner interface{ Scan(dest ...any) error }, loc *ti
 		return c, err
 	}
 	if trashedAt.Valid {
-		c.TrashedAt = formatContactTime(trashedAt.String, loc)
+		c.TrashedAt, c.TrashPurgeAt = contactTrashDates(trashedAt.String, loc)
 	}
 	c.Source = source
 	c.IsManual = isManual == 1
@@ -850,6 +850,12 @@ func (db *DB) GetContactWithProfile(ctx context.Context, userID, contactID strin
 	return db.getContactWithProfile(ctx, userID, contactID, false)
 }
 
+// GetContactWithProfileIncludingTrash is GetContactWithProfile that also
+// finds a contact in the Trash.
+func (db *DB) GetContactWithProfileIncludingTrash(ctx context.Context, userID, contactID string) (*models.Contact, *models.ContactProfile, error) {
+	return db.getContactWithProfile(ctx, userID, contactID, true)
+}
+
 // GetContactIncludingTrash is GetContact that also finds a contact in the
 // Trash, which is shown read-only, to restore or delete for good.
 func (db *DB) GetContactIncludingTrash(ctx context.Context, userID, contactID string) (*models.Contact, error) {
@@ -871,6 +877,9 @@ func (db *DB) getContactWithProfile(ctx context.Context, userID, contactID strin
 	contact, err := db.contactFromProfile(ctx, userID, *profile)
 	if err != nil {
 		return nil, nil, err
+	}
+	if profile.TrashedAt != "" {
+		contact.TrashedAt, contact.TrashPurgeAt = contactTrashDates(profile.TrashedAt, timezoneLocationFromContext(ctx))
 	}
 	db.hydrateContactAvatar(ctx, &contact)
 	contact.SaveTargets, _ = db.GetContactSaveTargets(ctx, userID, contactID)

@@ -124,6 +124,11 @@ templ ContactsSidebarBody(accounts []models.Account, activeFolder string, uiSett
 				}
 			}
 		</nav>
+		// Below the scrolling address books, always in view.
+		<div class="shrink-0 px-3 pb-2" data-contacts-sidebar-trash>
+			<hr class="divider-etched mx-1 mb-2"/>
+			@ContactsSidebarTrashItem(filters)
+		</div>
 	</div>
 }
 
@@ -173,10 +178,51 @@ templ ContactsSidebarItem(target string, label string, filters models.ContactFil
 		}
 	>
 		<span class="flex size-5 shrink-0 items-center justify-center rounded text-sidebar-foreground">
-			@icon.User(icon.Props{Class: "size-4"})
+			// The express theme swaps these for its own icons.
+			switch target {
+				case "local":
+					@icon.Monitor(icon.Props{Class: "size-4"})
+				default:
+					@icon.Users(icon.Props{Class: "size-4"})
+			}
 		</span>
 		<span class="flex-1 truncate">{ label }</span>
 	</a>
+}
+
+// ContactsSidebarTrashItem opens the contacts in the Trash. Its count loads
+// on its own, and again whenever contacts go to the Trash or leave it.
+templ ContactsSidebarTrashItem(filters models.ContactFilters) {
+	{{ active := contactSidebarActiveTarget(filters) == "trash" }}
+	<a
+		href={ templ.URL(contactSidebarURL(filters, "trash")) }
+		hx-get={ templ.URL(contactSidebarURL(filters, "trash")) }
+		hx-target="#main-content"
+		hx-swap="outerHTML"
+		hx-push-url={ templ.URL(contactSidebarURL(filters, "trash")) }
+		data-contact-sidebar-link
+		data-contact-sidebar-target="trash"
+		class={
+			"flex items-center gap-2.5 w-full px-2.5 py-1.5 rounded-md text-[13px] transition-all duration-150 mb-1",
+			templ.KV("bg-sidebar-accent text-sidebar-primary font-medium", active),
+			templ.KV("text-sidebar-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground", !active),
+		}
+	>
+		<span class="flex size-5 shrink-0 items-center justify-center rounded text-sidebar-foreground">
+			@icon.Trash2(icon.Props{Class: "size-4"})
+		</span>
+		<span class="flex-1 truncate">Trash</span>
+		// Its own target: the link's #main-content would be inherited otherwise.
+		<span hx-get="/contacts/trash-count" hx-trigger="load, contacts-trash-changed from:body" hx-target="this" hx-swap="innerHTML" hx-push-url="false" data-contacts-trash-count></span>
+	</a>
+}
+
+// ContactsTrashCount is the count beside the sidebar's Trash, none when it
+// is empty.
+templ ContactsTrashCount(count int) {
+	if count > 0 {
+		<span class="text-[11px] font-medium tabular-nums text-sidebar-foreground/70">{ fmt.Sprint(count) }</span>
+	}
 }
 
 templ ContactsSidebarBookItem(book models.ContactAddressBook, filters models.ContactFilters) {
@@ -227,14 +273,17 @@ templ ContactsSidebarAccountItem(account models.Account, filters models.ContactF
 	</a>
 }
 
-// Sidebar targets name one contact filter: "source:<origin>" filters by
-// origin (accounts and address books), anything else by sync location.
+// Sidebar targets name one contact filter: "trash" lists the Trash,
+// "source:<origin>" filters by origin (accounts and address books), anything
+// else by sync location.
 func contactSidebarURL(filters models.ContactFilters, target string) string {
 	values := url.Values{}
 	if strings.TrimSpace(filters.Query) != "" {
 		values.Set("q", strings.TrimSpace(filters.Query))
 	}
-	if source, ok := strings.CutPrefix(target, "source:"); ok {
+	if target == "trash" {
+		values.Set("trash", "1")
+	} else if source, ok := strings.CutPrefix(target, "source:"); ok {
 		values.Set("source", source)
 	} else if target != "" {
 		values.Set("save_target", target)
@@ -252,6 +301,8 @@ func contactSidebarURL(filters models.ContactFilters, target string) string {
 // "-" when they mix an origin with a sync location and no item matches.
 func contactSidebarActiveTarget(filters models.ContactFilters) string {
 	switch {
+	case filters.Trash:
+		return "trash"
 	case filters.Source == "":
 		return filters.SaveTarget
 	case filters.SaveTarget != "":

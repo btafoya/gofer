@@ -467,6 +467,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/contacts/export", h.handleExportSelectedContacts)
 	mux.HandleFunc("POST /api/contacts/bulk-delete", h.handleTrashContacts)
 	mux.HandleFunc("POST /api/contacts/trash/restore", h.handleRestoreContacts)
+	mux.HandleFunc("GET /contacts/trash-count", h.handleContactTrashCount)
 	mux.HandleFunc("POST /api/contacts/trash/delete", h.handleDeleteContactsForever)
 	mux.HandleFunc("GET /api/contacts/ids", h.handleContactIDs)
 	mux.HandleFunc("GET /api/contacts/{id}/export", h.handleExportContact)
@@ -942,7 +943,7 @@ func (h *Handler) handleContacts(w http.ResponseWriter, r *http.Request) {
 		ctx = local.contextWithUserTimezone(ctx, userID)
 		switch r.URL.Query().Get("partial") {
 		case "activity":
-			selected, err := local.db.GetContact(ctx, userID, strings.TrimSpace(r.URL.Query().Get("contact")))
+			selected, err := local.db.GetContactIncludingTrash(ctx, userID, strings.TrimSpace(r.URL.Query().Get("contact")))
 			if err != nil {
 				return nil, err
 			}
@@ -955,7 +956,7 @@ func (h *Handler) handleContacts(w http.ResponseWriter, r *http.Request) {
 			var profile *models.ContactProfile
 			if id := strings.TrimSpace(r.URL.Query().Get("contact")); id != "" {
 				var err error
-				selected, profile, err = local.db.GetContactWithProfile(ctx, userID, id)
+				selected, profile, err = local.db.GetContactWithProfileIncludingTrash(ctx, userID, id)
 				if err != nil {
 					return nil, err
 				}
@@ -982,7 +983,7 @@ func (h *Handler) handleContacts(w http.ResponseWriter, r *http.Request) {
 		var selected *models.Contact
 		var profile *models.ContactProfile
 		if id := strings.TrimSpace(r.URL.Query().Get("contact")); id != "" {
-			selected, profile, _ = local.db.GetContactWithProfile(ctx, userID, id)
+			selected, profile, _ = local.db.GetContactWithProfileIncludingTrash(ctx, userID, id)
 		}
 		showNew := selected == nil && r.URL.Query().Get("new") == "1"
 		syncQueued := selected != nil && r.URL.Query().Get("sync") == "queued"

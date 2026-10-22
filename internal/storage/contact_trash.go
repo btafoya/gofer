@@ -6,6 +6,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	"github.com/cristianadrielbraun/gofer/internal/models"
 )
 
 // A contact in the Trash is a deleted profile with trashed_at set. It keeps
@@ -16,7 +18,20 @@ import (
 
 // ContactTrashRetention is how long a contact stays in the Trash before it
 // is deleted for good.
-const ContactTrashRetention = 30 * 24 * time.Hour
+const ContactTrashRetention = models.ContactTrashRetentionDays * 24 * time.Hour
+
+// contactTrashDates formats when a contact went to the Trash, as stored,
+// and when it is deleted for good from there.
+func contactTrashDates(raw string, loc *time.Location) (trashed, purge string) {
+	t, ok := parseSQLiteDateTime(raw)
+	if !ok {
+		return raw, ""
+	}
+	if loc == nil {
+		loc = time.Local
+	}
+	return t.In(loc).Format("Jan 2, 2006"), t.Add(ContactTrashRetention).In(loc).Format("Jan 2, 2006")
+}
 
 // migrateV122ToV123 records when a contact went to the Trash.
 func migrateV122ToV123(db *sql.DB) error {

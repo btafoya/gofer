@@ -209,3 +209,28 @@ func TestTrashedSyncedContactLeavesItsAddressBookOnlyWhenDeletedForGood(t *testi
 		t.Fatal("a contact trashed recently was purged")
 	}
 }
+
+func TestContactsPageShowsTheTrashAndATrashedContact(t *testing.T) {
+	h, ids := contactSelectionFixture(t)
+	postContactIDs(t, h, h.handleTrashContacts, "/api/contacts/bulk-delete", ids["Ines Park"])
+
+	w := httptest.NewRecorder()
+	h.handleContactTrashCount(w, contactSelectionRequest(http.MethodGet, "/contacts/trash-count", "owner", nil))
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), ">1<") {
+		t.Fatalf("trash count = %d %q, want 1", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	h.handleContactItems(w, contactSelectionRequest(http.MethodGet, "/contacts/items?trash=1", "owner", nil))
+	if body := w.Body.String(); !strings.Contains(body, "Ines Park") || strings.Contains(body, "Tamsin Ray") {
+		t.Fatalf("trash items = %d, want only the trashed contact: %s", w.Code, body)
+	}
+
+	r := contactSelectionRequest(http.MethodGet, "/contacts?partial=detail&trash=1&contact="+ids["Ines Park"], "owner", nil)
+	r.Header.Set("HX-Request", "true")
+	w = httptest.NewRecorder()
+	h.handleContacts(w, r)
+	if body := w.Body.String(); !strings.Contains(body, "In the Trash") || !strings.Contains(body, `data-contact-restore="`+ids["Ines Park"]+`"`) {
+		t.Fatalf("trashed contact page = %d, want it read-only with Restore: %.400s", w.Code, body)
+	}
+}
