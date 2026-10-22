@@ -1,7 +1,9 @@
 package server
 
 import (
+	"context"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -17,4 +19,19 @@ func newHTTPServer(handler http.Handler) *http.Server {
 		IdleTimeout:       2 * time.Minute,
 		MaxHeaderBytes:    64 << 10,
 	}
+}
+
+// endStreamsOnCancel cancels event-stream requests when ctx is done, so
+// Shutdown does not wait on streams that never end. Other requests keep their context.
+func endStreamsOnCancel(ctx context.Context, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
+			streamCtx, cancel := context.WithCancel(r.Context())
+			defer cancel()
+			stop := context.AfterFunc(ctx, cancel)
+			defer stop()
+			r = r.WithContext(streamCtx)
+		}
+		next.ServeHTTP(w, r)
+	})
 }

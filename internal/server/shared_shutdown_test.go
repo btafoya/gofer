@@ -44,7 +44,7 @@ func TestSharedMainProcessDrainsOnSignal(t *testing.T) {
 	}
 	t.Setenv("GOFER_ADDR", address)
 	t.Setenv("GOFER_BASE_URL", "http://"+address)
-	t.Setenv("GOFER_AUTH_MODE", "personal")
+	t.Setenv("GOFER_AUTH_MODE", "open")
 	t.Setenv("GOFER_DB_PATH", filepath.Join(t.TempDir(), "gofer.db"))
 	t.Setenv("GOFER_SHUTDOWN_TIMEOUT", "5s")
 	t.Setenv("GOFER_SHARED_MAIN_PROCESS", "1")
@@ -107,6 +107,22 @@ func TestSharedMainProcessDrainsOnSignal(t *testing.T) {
 			t.Fatalf("healthz never answered: %v; stderr:\n%s", err, stderr.String())
 		}
 		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Hold an SSE stream open like a browser tab would; shutdown must not wait on it.
+	streamRequest, err := http.NewRequest(http.MethodGet, "http://"+address+"/api/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamRequest.Header.Set("Accept", "text/event-stream")
+	streamRequest.Header.Set("Origin", "http://"+address)
+	stream, err := (&http.Client{}).Do(streamRequest)
+	if err != nil {
+		t.Fatalf("open event stream: %v; stderr:\n%s", err, stderr.String())
+	}
+	defer stream.Body.Close()
+	if stream.StatusCode != http.StatusOK {
+		t.Fatalf("event stream = %s before signal", stream.Status)
 	}
 
 	if err := command.Process.Signal(syscall.SIGTERM); err != nil {

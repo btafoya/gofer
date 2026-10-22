@@ -237,7 +237,7 @@ func RunShared(rootCtx context.Context) error {
 		return err
 	}
 	openBrowserIfEnabled(httpConfig.BaseURL)
-	server := newHTTPServer(handler)
+	server := newHTTPServer(endStreamsOnCancel(ctx, handler))
 	finished := make(chan error, 1)
 	go func() { finished <- server.Serve(listener) }()
 	select {
@@ -245,7 +245,7 @@ func RunShared(rootCtx context.Context) error {
 		return err
 	case <-rootCtx.Done():
 	}
-	// Stop background workers first, then let in-flight requests finish.
+	// Stop workers and event streams first, then let in-flight requests finish.
 	cancel()
 	shutdownCtx, release := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer release()
