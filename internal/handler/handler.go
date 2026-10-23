@@ -15,6 +15,7 @@ import (
 	avatarresolver "github.com/cristianadrielbraun/gofer/internal/avatar"
 	"github.com/cristianadrielbraun/gofer/internal/calendar"
 	"github.com/cristianadrielbraun/gofer/internal/config"
+	"github.com/cristianadrielbraun/gofer/internal/httpguard"
 	mail "github.com/cristianadrielbraun/gofer/internal/mail"
 	mailautodiscover "github.com/cristianadrielbraun/gofer/internal/mail/autodiscover"
 	"github.com/cristianadrielbraun/gofer/internal/mail/imap"
@@ -48,29 +49,32 @@ import (
 )
 
 type Handler struct {
-	db                         *storage.DB
-	userStorage                *storage.AccountRouting
-	ownedMailbox               *Handler
-	userIMAP                   *mail.UserIMAP
-	userCredentials            *mailauth.UserCredentials
-	userMutationState          *userMessageMutationState
-	userIdleStatuses           map[string]map[string]mail.IDLEFolderRuntimeStatus
-	userAccounts               *config.UserAccountStore
-	signatureGuard             func(*sql.Tx) error
-	userAccountHooks           UserAccountHooks
-	userStorageContext         context.Context
-	userDeletions              map[string]*userAccountDeletionJob
-	userBackfillQueue          chan userContactBackfillJob
-	userBackfills              map[string]struct{}
-	userBackfillDone           chan struct{}
-	userBackfillContext        context.Context
-	userBackfillCancel         context.CancelFunc
-	userThreadingMu            sync.Mutex
-	userThreadingWorker        *userThreadingWorker
-	accountStore               *config.AccountStore
-	syncer                     *mail.SyncOrchestrator
-	blobStore                  *store.BlobStore
-	auth                       *auth.Manager
+	db                  *storage.DB
+	userStorage         *storage.AccountRouting
+	ownedMailbox        *Handler
+	userIMAP            *mail.UserIMAP
+	userCredentials     *mailauth.UserCredentials
+	userMutationState   *userMessageMutationState
+	userIdleStatuses    map[string]map[string]mail.IDLEFolderRuntimeStatus
+	userAccounts        *config.UserAccountStore
+	signatureGuard      func(*sql.Tx) error
+	userAccountHooks    UserAccountHooks
+	userStorageContext  context.Context
+	userDeletions       map[string]*userAccountDeletionJob
+	userBackfillQueue   chan userContactBackfillJob
+	userBackfills       map[string]struct{}
+	userBackfillDone    chan struct{}
+	userBackfillContext context.Context
+	userBackfillCancel  context.CancelFunc
+	userThreadingMu     sync.Mutex
+	userThreadingWorker *userThreadingWorker
+	accountStore        *config.AccountStore
+	syncer              *mail.SyncOrchestrator
+	blobStore           *store.BlobStore
+	auth                *auth.Manager
+	// HTTPConfig carries the instance's webhook base URL for Postmark
+	// registration; nil in partial test fixtures.
+	HTTPConfig                 *httpguard.Config
 	mailboxAuth                *mailauth.Service
 	avatar                     *avatarresolver.Resolver
 	bodyClientMu               sync.Mutex

@@ -188,7 +188,9 @@ func RunShared(rootCtx context.Context) error {
 	h.StartMailExports(ctx)
 	h.StartMailImports(ctx)
 	h.StartMailTransfers(ctx)
+	h.HTTPConfig = httpConfig
 	h.RegisterRoutes(mux)
+	h.RegisterPostmarkWebhooks(mux)
 	if httpConfig.OutlookWebhooks {
 		mux.Handle("POST "+httpguard.OutlookWebhookPath, mail.OutlookWebhookHandler(syncer))
 	}

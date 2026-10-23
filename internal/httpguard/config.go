@@ -36,8 +36,11 @@ type Config struct {
 	// OutlookWebhooksSkipAllowedCIDRs lets Microsoft's servers reach
 	// OutlookWebhookPath even when GOFER_ALLOWED_CIDRS doesn't list them.
 	OutlookWebhooksSkipAllowedCIDRs bool
-	allowedCIDRs                    []netip.Prefix
-	trustedProxyCIDRs               []netip.Prefix
+	// PostmarkWebhooksSkipAllowedCIDRs lets Postmark's servers reach
+	// PostmarkWebhookPathBase even when GOFER_ALLOWED_CIDRS doesn't list them.
+	PostmarkWebhooksSkipAllowedCIDRs bool
+	allowedCIDRs                     []netip.Prefix
+	trustedProxyCIDRs                []netip.Prefix
 
 	baseOrigin     requestOrigin
 	listenLoopback bool
@@ -69,6 +72,10 @@ func LoadConfig() (*Config, error) {
 		return nil, err
 	}
 	cfg.OutlookWebhooksSkipAllowedCIDRs, err = parseOptionalBool("GOFER_OUTLOOK_WEBHOOKS_SKIP_ALLOWED_CIDRS")
+	if err != nil {
+		return nil, err
+	}
+	cfg.PostmarkWebhooksSkipAllowedCIDRs, err = parseOptionalBool("GOFER_POSTMARK_WEBHOOKS_SKIP_ALLOWED_CIDRS")
 	if err != nil {
 		return nil, err
 	}

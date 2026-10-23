@@ -78,6 +78,22 @@ func (s *AccountStore) DecryptSmtpPassword(ctx context.Context, accountID string
 	return s.decryptPassword(userID, accountID, passwordKindSMTP, encrypted)
 }
 
+// DecryptPostmarkSecret reads the account's webhook signature secret.
+func (s *AccountStore) DecryptPostmarkSecret(ctx context.Context, accountID string) (string, error) {
+	var userID string
+	var encrypted []byte
+	err := s.db.Read().QueryRowContext(ctx,
+		`SELECT user_id, postmark_webhook_secret FROM accounts WHERE id = ? AND COALESCE(is_deleting, 0) = 0`, accountID,
+	).Scan(&userID, &encrypted)
+	if err != nil {
+		return "", fmt.Errorf("query postmark secret: %w", err)
+	}
+	if len(encrypted) == 0 {
+		return "", nil
+	}
+	return s.decryptPassword(userID, accountID, passwordKindPostmark, encrypted)
+}
+
 func (s *AccountStore) GetConfig(ctx context.Context, accountID string) (*models.AccountConfig, error) {
 	var cfg models.AccountConfig
 	cfg.AccountID = accountID
@@ -85,16 +101,18 @@ func (s *AccountStore) GetConfig(ctx context.Context, accountID string) (*models
 		`SELECT provider, provider_account_id,
 		        imap_host, imap_port, imap_tls_mode,
 		        smtp_host, smtp_port, smtp_tls_mode,
-		        username, auth_method, smtp_username, jmap_session_url
+		        username, auth_method, smtp_username, jmap_session_url,
+		        postmark_message_stream, postmark_inbound_address
 		 FROM accounts WHERE id = ? AND COALESCE(is_deleting, 0) = 0`, accountID,
 	).Scan(&cfg.Provider, &cfg.ProviderAccountID,
 		&cfg.IMAPHost, &cfg.IMAPPort, &cfg.IMAPTLSMode,
 		&cfg.SMTPHost, &cfg.SMTPPort, &cfg.SMTPTLSMode,
-		&cfg.Username, &cfg.AuthMethod, &cfg.SmtpUsername, &cfg.JMAPSessionURL)
+		&cfg.Username, &cfg.AuthMethod, &cfg.SmtpUsername, &cfg.JMAPSessionURL,
+		&cfg.PostmarkMessageStream, &cfg.PostmarkInboundAddress)
 	if err != nil {
 		return nil, fmt.Errorf("query account config: %w", err)
 	}
-	if accountProviderKeepsMailTransports(cfg.Provider) {
+	if accountProviderKeepsMailTransports(cfg.Provider) && cfg.IMAPHost != "" {
 		cfg.IMAPAllowPlaintext, err = s.policyDB.IsPlaintextTransportAllowed(ctx, "imap", cfg.IMAPHost, cfg.IMAPPort)
 		if err != nil {
 			return nil, fmt.Errorf("account %s: check IMAP security exception: %w", accountID, err)
@@ -578,6 +596,14 @@ func accountProviderUsesJMAP(provider string) bool {
 	return strings.EqualFold(strings.TrimSpace(provider), "jmap")
 }
 
+// accountProviderUsesPostmark reports Postmark accounts, which relay through
+// smtp.postmarkapp.com and receive by webhook instead of IMAP.
+func accountProviderUsesPostmark(provider string) bool {
+	return strings.EqualFold(strings.TrimSpace(provider), "postmark")
+}
+
+const postmarkSMTPHost = "smtp.postmarkapp.com"
+
 // accountProviderKeepsMailTransports reports whether the account keeps IMAP
 // and SMTP settings: not Outlook, which uses only Graph, or JMAP. Gmail keeps
 // them although its mail goes through the Gmail API, for the IMAP fallback.
@@ -693,6 +719,24 @@ func (s *AccountStore) prepareAccountCreation(ctx context.Context, req *models.C
 		req.SmtpUsername = ""
 		req.SmtpPassword = ""
 		req.AuthMethod = "plain"
+	} else if accountProviderUsesPostmark(req.Provider) {
+		// The server token is both SMTP credentials; relaying is preconfigured.
+		if strings.TrimSpace(req.EmailAddress) == "" || strings.TrimSpace(req.Password) == "" || strings.TrimSpace(req.PostmarkInboundAddress) == "" {
+			return errors.New("a Postmark account needs an email address, a server token and an inbound address")
+		}
+		req.PostmarkMessageStream = strings.TrimSpace(req.PostmarkMessageStream)
+		req.PostmarkInboundAddress = strings.ToLower(strings.TrimSpace(req.PostmarkInboundAddress))
+		req.IMAPHost = ""
+		req.IMAPPort = 0
+		req.IMAPTLSMode = ""
+		// Postmark's SMTP relay: 587, STARTTLS, server token as user and password.
+		req.SMTPHost = postmarkSMTPHost
+		req.SMTPPort = 587
+		req.SMTPTLSMode = mailtransport.TLSModeStartTLS
+		req.Username = req.Password
+		req.SmtpUsername = req.Password
+		req.SmtpPassword = req.Password
+		req.AuthMethod = "plain"
 	} else {
 		if req.IMAPPort == 0 {
 			req.IMAPPort = 993
@@ -736,6 +780,14 @@ func (s *AccountStore) createAccountWithID(ctx context.Context, userID, id strin
 		}
 	}
 
+	var encryptedPostmarkSecret []byte
+	if req.PostmarkWebhookSecret != "" {
+		encryptedPostmarkSecret, err = s.encryptPassword(userID, id, passwordKindPostmark, req.PostmarkWebhookSecret)
+		if err != nil {
+			return nil, fmt.Errorf("encrypt postmark secret: %w", err)
+		}
+	}
+
 	initials := extractInitials(req.DisplayName)
 	color := generateColor(id)
 
@@ -743,14 +795,16 @@ func (s *AccountStore) createAccountWithID(ctx context.Context, userID, id strin
 		  imap_host, imap_port, imap_tls_mode,
 		  smtp_host, smtp_port, smtp_tls_mode,
 		  username, encrypted_password, auth_method,
-		  smtp_username, encrypted_smtp_password, jmap_session_url, email_sync_enabled)
-		 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?`
+		  smtp_username, encrypted_smtp_password, jmap_session_url, email_sync_enabled,
+		  postmark_message_stream, postmark_inbound_address, postmark_webhook_secret)
+		 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?`
 	args := []any{
 		id, userID, req.Provider, req.ProviderAccountID, req.EmailAddress, req.DisplayName, color, initials,
 		req.IMAPHost, req.IMAPPort, req.IMAPTLSMode,
 		req.SMTPHost, req.SMTPPort, req.SMTPTLSMode,
 		req.Username, encrypted, req.AuthMethod,
-		req.SmtpUsername, encryptedSmtpPw, req.JMAPSessionURL, boolInt(!req.EmailSyncDisabled)}
+		req.SmtpUsername, encryptedSmtpPw, req.JMAPSessionURL, boolInt(!req.EmailSyncDisabled),
+		req.PostmarkMessageStream, req.PostmarkInboundAddress, encryptedPostmarkSecret}
 	if !purgeDeleting {
 		// The single local writer makes this check/insert atomic for concurrent
 		// UUID reservations. The same email may belong to different user stores.
@@ -874,8 +928,18 @@ func (s *AccountStore) updateAccount(ctx context.Context, accountID, userID stri
 			setClauses = append(setClauses, "smtp_username = ?")
 			args = append(args, req.SmtpUsername)
 		}
+		if accountProviderUsesPostmark(req.Provider) {
+			if req.PostmarkMessageStream != "" {
+				setClauses = append(setClauses, "postmark_message_stream = ?")
+				args = append(args, strings.TrimSpace(req.PostmarkMessageStream))
+			}
+			if req.PostmarkInboundAddress != "" {
+				setClauses = append(setClauses, "postmark_inbound_address = ?")
+				args = append(args, strings.ToLower(strings.TrimSpace(req.PostmarkInboundAddress)))
+			}
+		}
 	}
-	if req.Password != "" || (accountProviderKeepsMailTransports(req.Provider) && req.SmtpPassword != "") {
+	if req.Password != "" || (accountProviderKeepsMailTransports(req.Provider) && req.SmtpPassword != "") || req.PostmarkWebhookSecret != "" {
 		owner, err := s.accountOwner(ctx, accountID, userID)
 		if err != nil {
 			return err
@@ -896,6 +960,14 @@ func (s *AccountStore) updateAccount(ctx context.Context, accountID, userID stri
 			return fmt.Errorf("encrypt smtp password: %w", err)
 		}
 		setClauses = append(setClauses, "encrypted_smtp_password = ?")
+		args = append(args, encrypted)
+	}
+	if accountProviderUsesPostmark(req.Provider) && req.PostmarkWebhookSecret != "" {
+		encrypted, err := s.encryptPassword(userID, accountID, passwordKindPostmark, req.PostmarkWebhookSecret)
+		if err != nil {
+			return fmt.Errorf("encrypt postmark secret: %w", err)
+		}
+		setClauses = append(setClauses, "postmark_webhook_secret = ?")
 		args = append(args, encrypted)
 	}
 

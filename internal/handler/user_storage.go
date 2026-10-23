@@ -63,7 +63,7 @@ func (h *Handler) RegisterUserStorageRoutes(ctx context.Context, mux *http.Serve
 		return errors.New("account lifecycle hooks require a scoped account repository")
 	}
 	// Share immutable services, not Handler mutexes or mutable worker state.
-	routed := &Handler{db: h.db, auth: h.auth, syncer: h.syncer, userStorage: routing,
+	routed := &Handler{db: h.db, auth: h.auth, syncer: h.syncer, userStorage: routing, HTTPConfig: h.HTTPConfig,
 		blobStore: h.blobStore,
 		userIMAP:  option.IMAP, userCredentials: option.Credentials, userAccounts: option.Accounts, userAccountHooks: option.Hooks, userStorageContext: ctx, userDeletions: make(map[string]*userAccountDeletionJob),
 		vapidPublicKey: h.vapidPublicKey, testPush: h.testPush, userBackfillQueue: make(chan userContactBackfillJob, 32),
@@ -185,6 +185,8 @@ func (h *Handler) RegisterUserStorageRoutes(ctx context.Context, mux *http.Serve
 			handler(w, r)
 		})
 	}
+	// Postmark webhooks authenticate themselves; they are public paths.
+	routed.RegisterPostmarkWebhooks(mux)
 	private("GET /api/settings/ui", routed.handleGetUISettings)
 	private("GET /api/avatars/{hash}", routed.handleAvatarImage)
 	private("GET /api/provider-avatar", routed.handleProviderAvatarImage)

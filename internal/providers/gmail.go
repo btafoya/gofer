@@ -3,13 +3,14 @@ package providers
 import "github.com/cristianadrielbraun/gofer/internal/models"
 
 const (
-	ProviderIMAP    = "imap"
-	ProviderGmail   = "gmail"
-	ProviderOutlook = "outlook"
-	ProviderJMAP    = "jmap"
-	ProviderCardDAV = "carddav"
-	OAuthGoogle     = "google"
-	OAuthMicrosoft  = "microsoft"
+	ProviderIMAP     = "imap"
+	ProviderGmail    = "gmail"
+	ProviderOutlook  = "outlook"
+	ProviderJMAP     = "jmap"
+	ProviderPostmark = "postmark"
+	ProviderCardDAV  = "carddav"
+	OAuthGoogle      = "google"
+	OAuthMicrosoft   = "microsoft"
 )
 
 func GmailAccountRequest(email, displayName, providerAccountID string) *models.CreateAccountRequest {

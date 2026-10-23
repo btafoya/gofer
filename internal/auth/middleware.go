@@ -229,6 +229,11 @@ func isPublicPath(path string) bool {
 			return true
 		}
 	}
+	// Postmark webhooks prove themselves with the account ID and secret in the
+	// path plus a signature over the signed body.
+	if strings.HasPrefix(path, httpguard.PostmarkWebhookPathBase) {
+		return true
+	}
 	// Signed message-file links carry their own proof of access: the frame
 	// showing a message can't send the session cookie with its image requests.
 	return strings.HasPrefix(path, "/api/message-file/")

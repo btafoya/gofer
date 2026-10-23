@@ -3,6 +3,7 @@ package httpguard
 import (
 	"errors"
 	"net/netip"
+	"strings"
 )
 
 // OutlookWebhookPath receives Outlook change notifications from Microsoft
@@ -19,6 +20,26 @@ func (c *Config) OutlookWebhookURL() string {
 		return ""
 	}
 	return c.BaseURL + OutlookWebhookPath
+}
+
+// PostmarkWebhookPathBase prefixes the per-account webhook routes:
+// /webhooks/postmark/inbound/{accountID}/{secret} and
+// /webhooks/postmark/events/{accountID}/{secret}. Postmark's servers send no
+// session either; each route carries its account ID and a random secret, and
+// the signed body must match the account's webhook secret.
+const PostmarkWebhookPathBase = "/webhooks/postmark/"
+
+// PostmarkInboundWebhookURL and PostmarkEventsWebhookURL build the URLs an
+// account's Postmark server is configured to call.
+func (c *Config) PostmarkInboundWebhookURL(accountID, secret string) string {
+	return c.BaseURL + PostmarkWebhookPathBase + "inbound/" + accountID + "/" + secret
+}
+func (c *Config) PostmarkEventsWebhookURL(accountID, secret string) string {
+	return c.BaseURL + PostmarkWebhookPathBase + "events/" + accountID + "/" + secret
+}
+
+func (c *Config) isPostmarkWebhook(path string) bool {
+	return strings.HasPrefix(path, PostmarkWebhookPathBase)
 }
 
 func (c *Config) isOutlookWebhook(path string) bool {

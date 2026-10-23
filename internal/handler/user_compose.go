@@ -14,6 +14,7 @@ import (
 
 	"github.com/cristianadrielbraun/gofer/internal/config"
 	"github.com/cristianadrielbraun/gofer/internal/mail/message"
+	"github.com/cristianadrielbraun/gofer/internal/providers"
 	"github.com/cristianadrielbraun/gofer/internal/storage"
 	"github.com/google/uuid"
 )
@@ -104,7 +105,8 @@ func (h *Handler) saveUserComposeDraft(ctx context.Context, r *http.Request) (co
 		return fail(404, "account not found")
 	}
 	folder, remote, err := h.db.GetFolderIDByRole(ctx, accountID, "drafts")
-	if err != nil || folder == "" || remote == "" {
+	// A Postmark account has no remote mailbox; its drafts stay local.
+	if err != nil || folder == "" || (remote == "" && account.Provider != providers.ProviderPostmark) {
 		return fail(400, "drafts folder not available")
 	}
 	draftID := strings.TrimSpace(r.FormValue("draft_id"))
@@ -195,7 +197,8 @@ func (h *Handler) saveUserComposeDraft(ctx context.Context, r *http.Request) (co
 		}
 		if account.Provider == "imap" {
 			c.Sync = storage.QueueIMAPDraftUpsertInput{State: storage.IMAPDraftState{AccountID: accountID, DraftKey: draftID, FolderID: folder, FolderRemoteName: remote}, RevisionToken: revision, MIMEData: raw, MessageDate: msg.Date}
-		} else {
+		} else if account.Provider != providers.ProviderPostmark {
+			// Postmark drafts are local-only: no remote mailbox exists to sync.
 			c.ProviderSync = &storage.QueueUserProviderDraftInput{State: storage.UserProviderDraftState{AccountID: accountID, DraftKey: draftID, FolderID: folder, Provider: cfg.Provider, MailboxSubject: cfg.ProviderAccountID}, RevisionToken: revision, MIMEData: raw, MessageDate: msg.Date}
 		}
 		if pending != nil && pending.Status == storage.OutgoingSendPending {

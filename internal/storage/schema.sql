@@ -28,6 +28,9 @@ CREATE TABLE IF NOT EXISTS accounts (
     smtp_username TEXT NOT NULL DEFAULT '',
     encrypted_smtp_password BLOB,
     jmap_session_url TEXT NOT NULL DEFAULT '',
+    postmark_message_stream TEXT NOT NULL DEFAULT '',
+    postmark_inbound_address TEXT NOT NULL DEFAULT '',
+    postmark_webhook_secret BLOB,
     email_sync_enabled INTEGER NOT NULL DEFAULT 1,
     provider_push_enabled INTEGER NOT NULL DEFAULT 1 CHECK (provider_push_enabled IN (0, 1)),
     email_sync_error TEXT NOT NULL DEFAULT '',
@@ -1681,4 +1684,4 @@ CREATE TABLE IF NOT EXISTS calendar_invitation_messages (
 );
 
 -- Schema version marker for fresh installs
-INSERT OR REPLACE INTO schema_version (version) VALUES (123);
+INSERT OR REPLACE INTO schema_version (version) VALUES (124);

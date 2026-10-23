@@ -24,6 +24,12 @@ type AccountConfig struct {
 	// JMAPSessionURL is where a JMAP account's session is fetched from; it is
 	// empty for every other provider.
 	JMAPSessionURL string
+	// PostmarkMessageStream selects the relay's X-PM-Message-Stream header; it
+	// is empty for the Postmark server's default outbound stream.
+	PostmarkMessageStream string
+	// PostmarkInboundAddress is the inbound address or forwarding identity the
+	// account receives mail through.
+	PostmarkInboundAddress string
 	// JMAPAllowPlaintext and JMAPAllowPrivate are set when an administrator
 	// approved plain HTTP or a private address for the session URL's server.
 	JMAPAllowPlaintext bool
@@ -89,6 +95,11 @@ type CreateAccountRequest struct {
 	SmtpUsername      string `json:"smtp_username"`
 	SmtpPassword      string `json:"smtp_password"`
 	JMAPSessionURL    string `json:"jmap_session_url"`
+	// PostmarkStream and PostmarkInboundAddress configure a Postmark account.
+	// The webhook secret is generated server-side and never comes from a form.
+	PostmarkMessageStream  string `json:"postmark_message_stream"`
+	PostmarkInboundAddress string `json:"postmark_inbound_address"`
+	PostmarkWebhookSecret  string `json:"-"`
 	// EmailSyncDisabled creates the account with mail sync off, for accounts
 	// imported without their credentials.
 	EmailSyncDisabled bool `json:"-"`

@@ -53,7 +53,11 @@ func (c *Config) ClientNetworkMiddleware(authEnabled bool, next http.Handler) ht
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if authEnabled && c.OutlookWebhooksSkipAllowedCIDRs && c.isOutlookWebhook(r.URL.Path) {
+		if authEnabled && c.isOutlookWebhook(r.URL.Path) && c.OutlookWebhooksSkipAllowedCIDRs {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if c.isPostmarkWebhook(r.URL.Path) && c.PostmarkWebhooksSkipAllowedCIDRs {
 			next.ServeHTTP(w, r)
 			return
 		}

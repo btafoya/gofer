@@ -372,6 +372,8 @@ func (s *UserIMAP) snapshotAccount(ctx context.Context, owner, id string, allowJ
 			r.tokens = credentials.Account(owner, id)
 		} else if allowJMAP && r.config.Provider == providers.ProviderJMAP && r.config.AuthMethod == "plain" {
 			// Signs in with its stored password, like plain IMAP.
+		} else if r.config.Provider == providers.ProviderPostmark && r.config.AuthMethod == "plain" {
+			// Sends over Postmark's SMTP relay with its token; receives by webhook.
 		} else if r.config.Provider == providers.ProviderJMAP {
 			return ErrJMAPSyncUnavailable
 		} else if r.config.Provider != providers.ProviderIMAP || r.config.AuthMethod != "plain" {
@@ -512,6 +514,15 @@ func (s *UserIMAP) sync(ctx context.Context, owner, id string, repair, backgroun
 			s.stopWatchesLocked(id)
 			s.mu.Unlock()
 			return nil
+		}
+		if scope.config.Provider == providers.ProviderPostmark {
+			// Webhook-fed account: nothing to fetch. Only its delivery queue runs.
+			if queue == nil {
+				return nil
+			}
+			runErr := queue.Run(ctx, owner, id, nil)
+			queueFailed = runErr != nil
+			return runErr
 		}
 		if background && scope.config.Provider == providers.ProviderIMAP {
 			release, err := s.acquireServer(ctx, scope.config.IMAPHost)

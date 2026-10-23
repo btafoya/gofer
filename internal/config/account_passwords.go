@@ -20,10 +20,11 @@ const (
 	accountPasswordVersion = 2
 	accountPasswordContext = "gofer/account-password/v2"
 
-	passwordKindIMAP    = "imap"
-	passwordKindSMTP    = "smtp"
-	passwordKindCardDAV = "carddav"
-	passwordKindCalDAV  = "caldav"
+	passwordKindIMAP     = "imap"
+	passwordKindSMTP     = "smtp"
+	passwordKindCardDAV  = "carddav"
+	passwordKindCalDAV   = "caldav"
+	passwordKindPostmark = "postmark"
 
 	// passwordsUpgradedMarker is written to the database header (SQLite's
 	// application_id, otherwise unused by Gofer) once old-format passwords have
@@ -102,6 +103,7 @@ var storedPasswordQueries = []struct {
 	{"accounts", "encrypted_smtp_password", passwordKindSMTP, `SELECT user_id, id, encrypted_smtp_password FROM accounts WHERE encrypted_smtp_password IS NOT NULL`},
 	{"account_contact_sync_configs", "encrypted_password", passwordKindCardDAV, `SELECT user_id, account_id, encrypted_password FROM account_contact_sync_configs WHERE encrypted_password IS NOT NULL`},
 	{"account_caldav_configs", "encrypted_password", passwordKindCalDAV, `SELECT user_id, account_id, encrypted_password FROM account_caldav_configs WHERE encrypted_password IS NOT NULL`},
+	{"accounts", "postmark_webhook_secret", passwordKindPostmark, `SELECT user_id, id, postmark_webhook_secret FROM accounts WHERE postmark_webhook_secret IS NOT NULL`},
 }
 
 func listStoredPasswords(ctx context.Context, q interface {

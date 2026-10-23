@@ -90,6 +90,13 @@ func (q *userMailDelivery) Run(ctx context.Context, owner, id string, providerMa
 				return err
 			}
 			s.drafts = mail.NewJMAPDrafts(s.cfg, s.password)
+		} else if s.cfg.Provider == providers.ProviderPostmark {
+			// The server token signs in to the relay; no provider mailbox exists.
+			s.password, err = accounts.DecryptPassword(ctx, id)
+			if err != nil {
+				return err
+			}
+			s.smtpPassword = s.password
 		} else if s.cfg.AuthMethod != "oauth2" || (s.cfg.Provider != "gmail" && s.cfg.Provider != "outlook") || providerMail == nil {
 			return errors.New("routed mail delivery provider is unavailable")
 		}
@@ -154,7 +161,7 @@ func (s *userMailDeliveryScope) send(ctx context.Context) (bool, error) {
 	if s.cfg.Provider == providers.ProviderJMAP {
 		return s.sendJMAP(ctx, send)
 	}
-	if s.cfg.Provider != "imap" {
+	if s.cfg.Provider != "imap" && s.cfg.Provider != providers.ProviderPostmark {
 		return s.sendProvider(ctx, send)
 	}
 	var snapshot outgoingMessageSnapshot
@@ -164,8 +171,12 @@ func (s *userMailDeliveryScope) send(ctx context.Context) (bool, error) {
 		err = errors.New("unsupported routed outgoing message")
 	}
 	if err == nil {
+		mimeData := send.MIMEData
+		if s.cfg.Provider == providers.ProviderPostmark {
+			mimeData = postmarkRelayMIME(s.cfg, send)
+		}
 		work, cancel := context.WithTimeout(ctx, 2*time.Minute)
-		result, err, _ = smtpclient.SendRawMessageWithTiming(work, s.cfg, s.smtpPassword, send.EnvelopeFrom, send.EnvelopeRecipients, send.MIMEData)
+		result, err, _ = smtpclient.SendRawMessageWithTiming(work, s.cfg, s.smtpPassword, send.EnvelopeFrom, send.EnvelopeRecipients, mimeData)
 		cancel()
 	}
 	if ctx.Err() != nil {
@@ -230,6 +241,8 @@ func (s *userMailDeliveryScope) sentCopy(ctx context.Context) (bool, error) {
 	var err error
 	if s.cfg.Provider == "imap" {
 		err = s.copySent(work, send)
+	} else if s.cfg.Provider == providers.ProviderPostmark {
+		err = s.postmarkRelaySent(work, send)
 	} else {
 		err = s.cacheProviderSent(work, send)
 	}

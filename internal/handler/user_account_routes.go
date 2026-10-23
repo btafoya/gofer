@@ -26,7 +26,9 @@ func accountRequestFromForm(r *http.Request) models.CreateAccountRequest {
 		SMTPHost: r.FormValue("smtp_host"), SMTPPort: atoiDefault(r.FormValue("smtp_port"), 465), SMTPTLSMode: r.FormValue("smtp_tls_mode"),
 		Username: r.FormValue("username"), Password: r.FormValue("password"), AuthMethod: r.FormValue("auth_method"),
 		SmtpUsername: r.FormValue("smtp_username"), SmtpPassword: r.FormValue("smtp_password"),
-		JMAPSessionURL: r.FormValue("jmap_session_url"),
+		JMAPSessionURL:         r.FormValue("jmap_session_url"),
+		PostmarkMessageStream:  r.FormValue("postmark_message_stream"),
+		PostmarkInboundAddress: r.FormValue("postmark_inbound_address"),
 	}
 	switch r.FormValue("mail_service") {
 	case providers.MailServiceICloud:
@@ -128,12 +130,32 @@ func (h *Handler) handleUserCreateAccount(w http.ResponseWriter, r *http.Request
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+	} else if req.Provider == providers.ProviderPostmark {
+		// The server token is verified against Postmark now; webhook webhook
+		// routing is generated server-side and never typed by anyone.
+		if req.EmailAddress == "" || req.PostmarkInboundAddress == "" || req.Password == "" {
+			http.Error(w, "a Postmark account needs an email address, a server token and an inbound address", http.StatusBadRequest)
+			return
+		}
+		verifyCtx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+		if err := verifyPostmarkAccount(verifyCtx, req.Password); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		secret, err := generatePostmarkWebhookSecret()
+		if err != nil {
+			log.Printf("postmark account creation: %v", err)
+			http.Error(w, "failed to generate webhook secret", http.StatusInternalServerError)
+			return
+		}
+		req.PostmarkWebhookSecret = secret
 	} else if req.EmailAddress == "" || req.IMAPHost == "" || req.SMTPHost == "" || req.Username == "" || req.Password == "" {
 		http.Error(w, "all required fields must be filled in", http.StatusBadRequest)
 		return
 	}
 	// OAuth mailboxes must come through the session-bound authorization callback.
-	if (req.Provider != "" && req.Provider != "imap" && req.Provider != providers.ProviderJMAP) || (req.AuthMethod != "" && req.AuthMethod != "plain") {
+	if (req.Provider != "" && req.Provider != "imap" && req.Provider != providers.ProviderJMAP && req.Provider != providers.ProviderPostmark) || (req.AuthMethod != "" && req.AuthMethod != "plain") {
 		http.Error(w, "this account connection method is not available yet", http.StatusNotImplemented)
 		return
 	}
@@ -147,6 +169,21 @@ func (h *Handler) handleUserCreateAccount(w http.ResponseWriter, r *http.Request
 		return
 	}
 	w.Header().Set("X-Gofer-Account-ID", account.ID)
+	if req.Provider == providers.ProviderPostmark {
+		// Folders then webhook registration; a broken network or base URL is
+		// non-fatal for the account and retryable (logs say so).
+		bootstrapCtx := h.userStorageContext
+		if bootstrapCtx == nil {
+			bootstrapCtx = context.Background()
+		}
+		bootstrapCtx, cancel := context.WithTimeout(bootstrapCtx, 30*time.Second)
+		defer cancel()
+		if err := h.postmarkAccountBootstrap(bootstrapCtx, account.ID); err != nil {
+			log.Printf("routed postmark account %s bootstrap failed: %v", account.ID, err)
+			http.Error(w, "account saved; webhook setup failed", http.StatusServiceUnavailable)
+			return
+		}
+	}
 	if err := h.userStorage.WithAccountActivityForUser(r.Context(), h.userID(r.Context()), account.ID, func() error {
 		return h.userAccountHooks.Created(r.Context(), account.ID)
 	}); err != nil {
@@ -196,7 +233,7 @@ func (h *Handler) handleUserUpdateAccount(w http.ResponseWriter, r *http.Request
 		_ = views.AccountChangesSaved().Render(r.Context(), w)
 		return
 	}
-	if (req.Provider != "imap" && req.Provider != providers.ProviderJMAP) || req.Provider != existing.Provider || req.AuthMethod != "plain" || existing.AuthMethod != "plain" {
+	if (req.Provider != "imap" && req.Provider != providers.ProviderJMAP && req.Provider != providers.ProviderPostmark) || req.Provider != existing.Provider || req.AuthMethod != "plain" || existing.AuthMethod != "plain" {
 		http.Error(w, "this account connection method is not available yet", http.StatusNotImplemented)
 		return
 	}
@@ -205,6 +242,9 @@ func (h *Handler) handleUserUpdateAccount(w http.ResponseWriter, r *http.Request
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+	} else if req.Provider == providers.ProviderPostmark {
+		req.PostmarkMessageStream = strings.TrimSpace(req.PostmarkMessageStream)
+		req.PostmarkInboundAddress = strings.ToLower(strings.TrimSpace(req.PostmarkInboundAddress))
 	} else if req.EmailAddress == "" || req.IMAPHost == "" || req.SMTPHost == "" || req.Username == "" {
 		http.Error(w, "all required fields must be filled in", http.StatusBadRequest)
 		return
@@ -212,6 +252,19 @@ func (h *Handler) handleUserUpdateAccount(w http.ResponseWriter, r *http.Request
 	if err := h.userAccounts.UpdateAccount(r.Context(), owner, id, &req); err != nil {
 		userAccountError(w, r, err)
 		return
+	}
+	if req.Provider == providers.ProviderPostmark {
+		bootstrapCtx := h.userStorageContext
+		if bootstrapCtx == nil {
+			bootstrapCtx = context.Background()
+		}
+		bootstrapCtx, cancel := context.WithTimeout(bootstrapCtx, 30*time.Second)
+		defer cancel()
+		if err := h.postmarkAccountBootstrap(bootstrapCtx, id); err != nil {
+			log.Printf("routed postmark account %s re-bootstrap failed: %v", id, err)
+			http.Error(w, "account saved; webhook setup failed", http.StatusServiceUnavailable)
+			return
+		}
 	}
 	if err := h.resolveImportedMailLogin(w, r.Context(), owner, id, &req); err != nil {
 		log.Printf("routed account %s: turn on imported services: %v", id, err)
